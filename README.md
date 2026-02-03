@@ -89,8 +89,7 @@ DazeStackWP is built for:
 
 ### Run from GitHub (one-time)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazeStack/DazeStackWP/main/dazestack-wp.sh -o dazestack-wp.sh
-chmod +x dazestack-wp.sh
+curl -fsSL https://raw.githubusercontent.com/DazeStack/DazeStackWP/main/dazestack-wp.sh | tr -d '\r' | tee dazestack-wp.sh >/dev/null && chmod +x dazestack-wp.sh
 sudo ./dazestack-wp.sh
 ```
 
@@ -346,3 +345,4 @@ See: TRADEMARK.md
 If this project saves you time, please consider starring the repo and sharing feedback via issues/discussions.
 
 ::contentReference[oaicite:0]{index=0}
+
