@@ -337,7 +337,6 @@ See: TRADEMARK.md
 
 ## 🧾 Support & Contact
 * hello@dazestack.com
-* legal@dazestack.com
 
 ## ❤️ Credits
 
@@ -345,4 +344,5 @@ See: TRADEMARK.md
 If this project saves you time, please consider starring the repo and sharing feedback via issues/discussions.
 
 ::contentReference[oaicite:0]{index=0}
+
 
