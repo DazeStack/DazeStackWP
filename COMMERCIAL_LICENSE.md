@@ -17,4 +17,4 @@ You must obtain a commercial license if you want to:
 
 Commercial licensing is available from:
 
-📩 legal@dazestack.com
+📩 hello@dazestack.com
