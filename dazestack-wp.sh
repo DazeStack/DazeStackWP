@@ -60,6 +60,10 @@ REGISTRY_FILE="${STATE_DIR}/domain-registry.json"
 
 AUTO_TUNE_SCRIPT="/usr/local/bin/dazestack-wp-autotune.sh"
 AUTO_TUNE_CRON_FILE="/etc/cron.d/dazestack-wp-autotune"
+NGINX_AUTO_UPDATE_SCRIPT="/usr/local/bin/dazestack-wp-nginx-auto.sh"
+NGINX_AUTO_UPDATE_CRON="/etc/cron.d/dazestack-wp-nginx-auto"
+NGINX_AUTO_UPDATE_SCHEDULE=${NGINX_AUTO_UPDATE_SCHEDULE:-"25 4 * * 1"}
+ENABLE_NGINX_AUTO_UPDATE=${ENABLE_NGINX_AUTO_UPDATE:-true}
 CRON_RUNNER_SCRIPT="/usr/local/bin/dazestack-wp-crons.sh"
 CRON_BACKUP_SCRIPT="/usr/local/bin/dazestack-wp-backups.sh"
 CRON_WORDPRESS_FILE="/etc/cron.d/dazestack-wp-cron"
@@ -89,6 +93,13 @@ ENABLE_REDIS_ACL=${ENABLE_REDIS_ACL:-true}
 ENABLE_HTTP3=${ENABLE_HTTP3:-true}
 ENABLE_BROTLI=${ENABLE_BROTLI:-true}
 ENABLE_ZSTD=${ENABLE_ZSTD:-true}
+ENABLE_HTTP3_HQ=${ENABLE_HTTP3_HQ:-false}
+ENABLE_HTTP3_FORCE_ALL=${ENABLE_HTTP3_FORCE_ALL:-false}
+ENABLE_QUIC_TUNING=${ENABLE_QUIC_TUNING:-true}
+ENABLE_TLS_SESSION_TICKETS=${ENABLE_TLS_SESSION_TICKETS:-true}
+ENABLE_TLS_EARLY_DATA=${ENABLE_TLS_EARLY_DATA:-false}
+ENABLE_VISIBILITY_ENDPOINTS=${ENABLE_VISIBILITY_ENDPOINTS:-true}
+VISIBILITY_PORT=${VISIBILITY_PORT:-"8080"}
 ENABLE_SYSCTL_TUNING=${ENABLE_SYSCTL_TUNING:-true}
 ENABLE_AUTO_TUNE=${ENABLE_AUTO_TUNE:-true}
 AUTO_TUNE_CRON=${AUTO_TUNE_CRON:-"15 3 * * *"}
@@ -96,12 +107,42 @@ ENABLE_AUTO_SSL=${ENABLE_AUTO_SSL:-false}
 ENABLE_CLOUDFLARE=${ENABLE_CLOUDFLARE:-true}
 REQUIRE_OPCACHE=${REQUIRE_OPCACHE:-false}
 ENABLE_NGINX_HELPER=${ENABLE_NGINX_HELPER:-true}
+ENABLE_CDN=${ENABLE_CDN:-true}
+CDN_DEFAULT_SCHEME=${CDN_DEFAULT_SCHEME:-"https"}
+ENABLE_IMAGE_OPTIMIZATION=${ENABLE_IMAGE_OPTIMIZATION:-true}
+IMAGE_OPTIMIZER_CRON=${IMAGE_OPTIMIZER_CRON:-"35 3 * * *"}
+ENABLE_BBR=${ENABLE_BBR:-true}
+ENABLE_NGINX_SOURCE_BUILD=${ENABLE_NGINX_SOURCE_BUILD:-true}
+NGINX_SOURCE_VERSION=${NGINX_SOURCE_VERSION:-"1.28.1"}
+NGINX_SOURCE_BUILD_ROOT=${NGINX_SOURCE_BUILD_ROOT:-"/usr/local/src/dazestack-wp"}
+NGINX_BROTLI_REPO=${NGINX_BROTLI_REPO:-"https://github.com/google/ngx_brotli.git"}
+NGINX_BROTLI_REF=${NGINX_BROTLI_REF:-"master"}
+NGINX_ZSTD_REPO=${NGINX_ZSTD_REPO:-"https://github.com/tokers/zstd-nginx-module.git"}
+NGINX_ZSTD_REF=${NGINX_ZSTD_REF:-"master"}
+ZSTD_BUILD_PIC=${ZSTD_BUILD_PIC:-true}
+ZSTD_SOURCE_REPO=${ZSTD_SOURCE_REPO:-"https://github.com/facebook/zstd.git"}
+ZSTD_SOURCE_REF=${ZSTD_SOURCE_REF:-"latest-stable"}
+ZSTD_PIC_PREFIX=${ZSTD_PIC_PREFIX:-"${NGINX_SOURCE_BUILD_ROOT}/zstd-pic"}
+BROTLI_BUILD_PIC=${BROTLI_BUILD_PIC:-true}
+NGINX_QUIC_OPENSSL_VENDOR=${NGINX_QUIC_OPENSSL_VENDOR:-"official"}
+NGINX_QUIC_OPENSSL_REPO_OFFICIAL=${NGINX_QUIC_OPENSSL_REPO_OFFICIAL:-"https://github.com/openssl/openssl.git"}
+NGINX_QUIC_OPENSSL_REPO_QUIC=${NGINX_QUIC_OPENSSL_REPO_QUIC:-"https://github.com/quictls/openssl.git"}
+NGINX_QUIC_OPENSSL_REF_OFFICIAL=${NGINX_QUIC_OPENSSL_REF_OFFICIAL:-"latest-stable"}
+NGINX_QUIC_OPENSSL_REF_QUIC=${NGINX_QUIC_OPENSSL_REF_QUIC:-"latest-stable"}
+NGINX_QUIC_OPENSSL_MIN_VERSION=${NGINX_QUIC_OPENSSL_MIN_VERSION:-"3.5.1"}
+NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLBACK=${NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLBACK:-"openssl-3.5.1"}
+NGINX_QUIC_OPENSSL_REF_QUIC_FALLBACK=${NGINX_QUIC_OPENSSL_REF_QUIC_FALLBACK:-"openssl-3.0.2-quic1"}
+NGINX_QUIC_OPENSSL_REPO=${NGINX_QUIC_OPENSSL_REPO:-""}
+NGINX_QUIC_OPENSSL_REF=${NGINX_QUIC_OPENSSL_REF:-""}
 CLI_WRAPPER="/usr/local/sbin/dazestack-wp"
 
 # PHP packages that may be merged/built-in (avoid hard failure if absent)
 PHP_OPTIONAL_PACKAGES=()
 ONDREJ_PHP_PPA_REGEX="ondrej/php|LP-PPA-ondrej-php|deb.sury.org"
 ONDREJ_PHP_PREF_FILE="/etc/apt/preferences.d/ondrej-php"
+ONDREJ_NGINX_PPA="ppa:ondrej/nginx"
+ONDREJ_NGINX_PPA_REGEX="ondrej/nginx|LP-PPA-ondrej-nginx|LP-PPA-ondrej-nginx-mainline"
+ONDREJ_NGINX_PREF_FILE="/etc/apt/preferences.d/ondrej-nginx"
 
 # PHP hardening (allow override; avoid breaking WP core/plugin updates)
 PHP_DISABLE_FUNCTIONS=${PHP_DISABLE_FUNCTIONS:-"exec,passthru,shell_exec,system,proc_open,popen,proc_close,proc_terminate"}
@@ -154,6 +195,7 @@ BROTLI_AVAILABLE=false
 ZSTD_AVAILABLE=false
 CACHE_PURGE_AVAILABLE=false
 ERROR_HANDLED=false
+NGINX_QUIC_OPENSSL_REF_REQUESTED=""
 
 # Color codes
 RED='\033[0;31m'
@@ -184,6 +226,10 @@ LOG_TRACE_FILE="$LOG_DIR/trace.log"
 LOG_AUDIT_FILE="$LOG_DIR/audit.log"
 LOG_SECURITY_FILE="$LOG_DIR/security.log"
 LOG_CONTEXT=""
+
+IMAGE_OPTIMIZER_SCRIPT="/usr/local/bin/dazestack-wp-image-optimize.sh"
+IMAGE_OPTIMIZER_CRON_FILE="/etc/cron.d/dazestack-wp-image-optimize"
+NGINX_BUILD_STATE_FILE="${STATE_DIR}/nginx-build.json"
 
 # =============================================================================
 # SECTION 2: SECURITY FUNCTIONS
@@ -914,6 +960,8 @@ REDIS_ALLOC
 
     chmod 600 "$STATE_DIR"/*.json
     log_success "Registries initialized"
+
+    init_nginx_build_state
 }
 
 redis_allocate_db() {
@@ -1066,6 +1114,10 @@ domain_register() {
             db_user: $db_user,
             site_title: $site_title,
             admin_email: $admin_email,
+            cdn_enabled: false,
+            cdn_url: "",
+            cdn_provider: "",
+            cdn_updated_at: now,
             created_at: now,
             status: "active",
             version: "0.0.1"
@@ -1658,14 +1710,23 @@ install_nginx_optional_modules() {
     local optional=()
     local pkg=""
 
-    pkg=$(first_available_package libnginx-mod-http-brotli nginx-module-brotli || true)
-    [[ -n "$pkg" ]] && optional+=("$pkg")
+    if [[ "$ENABLE_BROTLI" == "true" ]]; then
+        pkg=$(first_available_package libnginx-mod-http-brotli nginx-module-brotli || true)
+        [[ -n "$pkg" ]] && optional+=("$pkg")
+    fi
 
-    pkg=$(first_available_package libnginx-mod-http-zstd nginx-module-zstd || true)
-    [[ -n "$pkg" ]] && optional+=("$pkg")
+    if [[ "$ENABLE_ZSTD" == "true" ]]; then
+        pkg=$(first_available_package libnginx-mod-http-zstd nginx-module-zstd || true)
+        [[ -n "$pkg" ]] && optional+=("$pkg")
+    fi
 
     pkg=$(first_available_package libnginx-mod-http-cache-purge nginx-module-cache-purge || true)
     [[ -n "$pkg" ]] && optional+=("$pkg")
+
+    if [[ "$ENABLE_IMAGE_OPTIMIZATION" == "true" ]]; then
+        pkg=$(first_available_package libnginx-mod-http-image-filter nginx-module-image-filter || true)
+        [[ -n "$pkg" ]] && optional+=("$pkg")
+    fi
 
     if [[ ${#optional[@]} -eq 0 ]]; then
         log_debug "No optional Nginx modules available via APT"
@@ -1682,6 +1743,11 @@ policy_has_ondrej_source() {
     echo "$policy" | grep -Eqi "$ONDREJ_PHP_PPA_REGEX"
 }
 
+policy_has_ondrej_nginx_source() {
+    local policy=$1
+    echo "$policy" | grep -Eqi "$ONDREJ_NGINX_PPA_REGEX"
+}
+
 policy_candidate_from_ondrej() {
     local policy=$1
     local candidate=$2
@@ -1694,6 +1760,68 @@ policy_candidate_from_ondrej() {
         inver && $0 ~ re { found=1 }
         END { exit(found ? 0 : 1) }
     ' <<< "$policy"
+}
+
+policy_candidate_from_ondrej_nginx() {
+    local policy=$1
+    local candidate=$2
+    [[ -z "$candidate" || "$candidate" == "(none)" ]] && return 1
+    awk -v cand="$candidate" -v re="$ONDREJ_NGINX_PPA_REGEX" '
+        $1 == "***" { ver=$2 }
+        $1 ~ /^[0-9]/ { ver=$1 }
+        ver == cand { inver=1 }
+        ver != cand && $1 ~ /^[0-9]/ { inver=0 }
+        inver && $0 ~ re { found=1 }
+        END { exit(found ? 0 : 1) }
+    ' <<< "$policy"
+}
+
+ensure_ondrej_nginx_mainline() {
+    log_info "Adding Ondrej Nginx repository..."
+    if ! command -v add-apt-repository >/dev/null 2>&1; then
+        log_warn "add-apt-repository not available; skipping Ondrej Nginx repo"
+        return 1
+    fi
+    if ! add-apt-repository -y "$ONDREJ_NGINX_PPA" >/dev/null 2>&1; then
+        log_warn "Failed to add Ondrej Nginx repository ($ONDREJ_NGINX_PPA)"
+        if [[ "$ONDREJ_NGINX_PPA" != "ppa:ondrej/nginx-mainline" ]]; then
+            log_warn "Trying legacy PPA (ppa:ondrej/nginx-mainline)"
+            if ! add-apt-repository -y "ppa:ondrej/nginx-mainline" >/dev/null 2>&1; then
+                log_warn "Failed to add legacy Nginx mainline repository"
+                return 1
+            fi
+        else
+            return 1
+        fi
+    fi
+
+    cat > "$ONDREJ_NGINX_PREF_FILE" <<'EOF'
+Package: nginx nginx-*
+Pin: release o=LP-PPA-ondrej-nginx-mainline
+Pin-Priority: 1001
+
+Package: nginx nginx-*
+Pin: release o=LP-PPA-ondrej-nginx
+Pin-Priority: 1001
+
+Package: nginx nginx-* libnginx-mod-* nginx-module-*
+Pin: origin "ppa.launchpad.net"
+Pin-Priority: 1001
+EOF
+
+    apt-get update >/dev/null 2>&1 || {
+        log_warn "Failed to update package lists after adding Ondrej Nginx repo"
+        return 1
+    }
+
+    local policy
+    policy=$(apt-cache policy nginx 2>/dev/null || true)
+    local candidate
+    candidate=$(echo "$policy" | awk '/Candidate:/ {print $2}')
+    if ! policy_candidate_from_ondrej_nginx "$policy" "$candidate"; then
+        log_warn "Nginx candidate not from Ondrej PPA (HTTP/3 may be unavailable)"
+    fi
+    return 0
 }
 
 ensure_ondrej_php_preferred() {
@@ -1965,6 +2093,9 @@ configure_firewall_preserve() {
     ufw allow "$ssh_port"/tcp >/dev/null 2>&1 || true
     ufw allow http >/dev/null 2>&1 || true
     ufw allow https >/dev/null 2>&1 || true
+    if [[ "$ENABLE_HTTP3" == "true" ]]; then
+        ufw allow 443/udp >/dev/null 2>&1 || true
+    fi
     
     if ufw status | grep -q "Status: active"; then
         log_success "UFW rules updated (existing rules preserved)"
@@ -1991,7 +2122,9 @@ detect_http3_support() {
     if ! command -v nginx &>/dev/null; then
         return 0
     fi
-    if nginx -V 2>&1 | grep -qiE 'http_v3_module|quic'; then
+    # Only treat HTTP/3 as available when the HTTP/3 module is compiled in.
+    # Avoid matching unrelated "quic" strings that can cause false positives.
+    if nginx -V 2>&1 | grep -qiE '(^|[[:space:]])--with-http_v3_module([[:space:]]|$)'; then
         HTTP3_AVAILABLE=true
         log_success "HTTP/3 support detected"
     else
@@ -2007,7 +2140,13 @@ detect_brotli_support() {
     if ! command -v nginx &>/dev/null; then
         return 0
     fi
-    if nginx -V 2>&1 | grep -qi "brotli" || nginx_module_enabled "brotli"; then
+    if nginx_module_enabled "brotli"; then
+        BROTLI_AVAILABLE=true
+        log_success "Brotli support detected"
+        return 0
+    fi
+
+    if nginx -V 2>&1 | grep -qiE -- '--add-module=[^ ]*brotli|--with-http_brotli_module'; then
         BROTLI_AVAILABLE=true
         log_success "Brotli support detected"
     else
@@ -2023,7 +2162,13 @@ detect_zstd_support() {
     if ! command -v nginx &>/dev/null; then
         return 0
     fi
-    if nginx -V 2>&1 | grep -qi "zstd" || nginx_module_enabled "zstd"; then
+    if nginx_module_enabled "zstd"; then
+        ZSTD_AVAILABLE=true
+        log_success "Zstd support detected"
+        return 0
+    fi
+
+    if nginx -V 2>&1 | grep -qiE -- '--add-module=[^ ]*zstd|--with-http_zstd_module'; then
         ZSTD_AVAILABLE=true
         log_success "Zstd support detected"
     else
@@ -2036,9 +2181,15 @@ detect_cache_purge_support() {
     if ! command -v nginx &>/dev/null; then
         return 0
     fi
-    if nginx -V 2>&1 | grep -qiE "cache_purge|ngx_cache_purge" \
-        || nginx_module_enabled "cache_purge" \
+    if nginx_module_enabled "cache_purge" \
+        || nginx_module_enabled "cache-purge" \
         || nginx_module_enabled "ngx_cache_purge"; then
+        CACHE_PURGE_AVAILABLE=true
+        log_success "Nginx cache purge module detected"
+        return 0
+    fi
+
+    if nginx -V 2>&1 | grep -qiE -- '--add-module=[^ ]*cache[-_]?purge|--with-http_cache_purge_module'; then
         CACHE_PURGE_AVAILABLE=true
         log_success "Nginx cache purge module detected"
     else
@@ -2047,6 +2198,11 @@ detect_cache_purge_support() {
 }
 
 write_nginx_main_config() {
+    local session_tickets="off"
+    local early_data="off"
+    [[ "$ENABLE_TLS_SESSION_TICKETS" == "true" ]] && session_tickets="on"
+    [[ "$ENABLE_TLS_EARLY_DATA" == "true" ]] && early_data="on"
+
     cat > /etc/nginx/nginx.conf <<NGINX_MAIN
 user www-data;
 worker_processes $NGINX_WORKER_PROCESSES;
@@ -2085,7 +2241,8 @@ http {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:SSL:50m;
     ssl_session_timeout 1d;
-    ssl_session_tickets off;
+    ssl_session_tickets $session_tickets;
+    ssl_early_data $early_data;
     ssl_prefer_server_ciphers off;
 
     # File cache
@@ -2128,8 +2285,10 @@ NGINX_SECURITY
 }
 
 write_nginx_performance_snippet() {
+    detect_brotli_support
+    detect_zstd_support
     cat > /etc/nginx/snippets/wordpress-performance.conf <<'NGINX_PERF'
-# Compression
+# Compression (prefer zstd when client accepts; brotli/gzip fallback)
 gzip on;
 gzip_vary on;
 gzip_proxied any;
@@ -2139,6 +2298,7 @@ gzip_comp_level 5;
 gzip_static on;
 gzip_disable "msie6";
 gzip_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/xml+rss application/rss+xml application/atom+xml application/xhtml+xml image/svg+xml application/manifest+json;
+add_header Vary "Accept-Encoding" always;
 NGINX_PERF
 
     if [[ "$BROTLI_AVAILABLE" == "true" ]]; then
@@ -2172,9 +2332,30 @@ NGINX_HTTP3
     if [[ "$HTTP3_AVAILABLE" == "true" ]]; then
         cat >> /etc/nginx/snippets/wordpress-http3.conf <<'NGINX_HTTP3_EXTRA'
 listen 443 quic reuseport;
+listen [::]:443 quic reuseport;
 add_header Alt-Svc 'h3=":443"; ma=86400' always;
 add_header Alt-Svc 'h3-29=":443"; ma=86400' always;
 NGINX_HTTP3_EXTRA
+    fi
+
+    if [[ "$HTTP3_AVAILABLE" == "true" && "$ENABLE_HTTP3_HQ" == "true" ]]; then
+        cat >> /etc/nginx/snippets/wordpress-http3.conf <<'NGINX_HTTP3_HQ'
+http3_hq on;
+add_header Alt-Svc 'hq-29=":443"; ma=86400' always;
+NGINX_HTTP3_HQ
+    fi
+
+    if [[ "$HTTP3_AVAILABLE" == "true" && "$ENABLE_QUIC_TUNING" == "true" ]]; then
+        cat >> /etc/nginx/snippets/wordpress-http3.conf <<'NGINX_QUIC_TUNE'
+quic_retry on;
+quic_gso on;
+NGINX_QUIC_TUNE
+    fi
+
+    if [[ "$HTTP3_AVAILABLE" == "true" && "$ENABLE_TLS_EARLY_DATA" == "true" ]]; then
+        cat >> /etc/nginx/snippets/wordpress-http3.conf <<'NGINX_TLS_EARLY'
+ssl_early_data on;
+NGINX_TLS_EARLY
     fi
 }
 
@@ -2187,6 +2368,186 @@ limit_req_status 429;
 NGINX_RATELIMIT
 }
 
+write_nginx_visibility_config() {
+    local conf="/etc/nginx/conf.d/90-dazestack-visibility.conf"
+
+    if [[ "$ENABLE_VISIBILITY_ENDPOINTS" != "true" ]]; then
+        rm -f "$conf" 2>/dev/null || true
+        return 0
+    fi
+
+    local port="${VISIBILITY_PORT:-8080}"
+    if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+        log_warn "Invalid VISIBILITY_PORT '$port'; using 8080"
+        port="8080"
+    fi
+
+    cat > "$conf" <<NGINX_VIS
+server {
+    listen 127.0.0.1:${port};
+    listen [::1]:${port};
+    server_name localhost;
+    access_log off;
+
+    allow 127.0.0.1;
+    allow ::1;
+    deny all;
+
+    location = /dazestack-health {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /dazestack-status {
+        stub_status;
+    }
+
+    location = /dazestack-protocol {
+        default_type text/plain;
+        return 200 "server_protocol=\$server_protocol\nssl_protocol=\$ssl_protocol\nssl_cipher=\$ssl_cipher\nsession_reused=\$ssl_session_reused\n";
+    }
+}
+NGINX_VIS
+}
+
+write_nginx_image_optimization_map() {
+    cat > /etc/nginx/conf.d/05-image-optimization.conf <<'NGINX_IMG_MAP'
+# Image optimization (serve AVIF/WebP variants when available)
+map $http_accept $dazestack_img_suffix {
+    default "";
+    "~*avif" ".avif";
+    "~*webp" ".webp";
+}
+NGINX_IMG_MAP
+}
+
+write_nginx_image_optimization_snippet() {
+    if [[ "$ENABLE_IMAGE_OPTIMIZATION" != "true" ]]; then
+        cat > /etc/nginx/snippets/wordpress-images.conf <<'NGINX_IMG_DISABLED'
+# Image optimization disabled (fallback to standard caching)
+location ~* \.(?:jpe?g|png|webp|avif)$ {
+    expires 365d;
+    add_header Cache-Control "public, immutable";
+    access_log off;
+}
+NGINX_IMG_DISABLED
+        return 0
+    fi
+
+    cat > /etc/nginx/snippets/wordpress-images.conf <<'NGINX_IMG'
+# Image optimization (serve AVIF/WebP when available)
+location ~* \.(?:jpe?g|png|webp|avif)$ {
+    add_header Vary Accept;
+    try_files $uri$dazestack_img_suffix $uri =404;
+    expires 365d;
+    add_header Cache-Control "public, immutable";
+    access_log off;
+}
+NGINX_IMG
+}
+
+install_image_optimization_tools() {
+    if [[ "$ENABLE_IMAGE_OPTIMIZATION" != "true" ]]; then
+        return 0
+    fi
+    local packages=()
+    if package_available libwebp-tools; then
+        packages+=("libwebp-tools")
+    fi
+    if package_available libavif-bin; then
+        packages+=("libavif-bin")
+    fi
+
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        log_debug "Image optimization tools not available via APT"
+        return 0
+    fi
+
+    log_info "Installing image optimization tools: ${packages[*]}"
+    safe_apt_install "${packages[@]}" || log_warn "Image optimization tool install failed"
+    return 0
+}
+
+write_image_optimizer_script() {
+    cat > "$IMAGE_OPTIMIZER_SCRIPT" <<'IMG_OPT'
+#!/bin/bash
+set -euo pipefail
+
+optimize_domain() {
+    local domain=$1
+    local root="/var/www/$domain/public/wp-content/uploads"
+    [[ -d "$root" ]] || return 0
+
+    local have_webp="false"
+    local have_avif="false"
+    command -v cwebp >/dev/null 2>&1 && have_webp="true"
+    command -v avifenc >/dev/null 2>&1 && have_avif="true"
+
+    if [[ "$have_webp" != "true" && "$have_avif" != "true" ]]; then
+        return 0
+    fi
+
+    local use_ionice="false"
+    command -v ionice >/dev/null 2>&1 && use_ionice="true"
+
+    find "$root" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \) -print0 | while IFS= read -r -d '' file; do
+        if [[ "$have_webp" == "true" ]]; then
+            out="${file}.webp"
+            if [[ ! -f "$out" || "$file" -nt "$out" ]]; then
+                if [[ "$use_ionice" == "true" ]]; then
+                    ionice -c2 -n7 nice -n 10 cwebp -quiet -q 82 "$file" -o "$out" >/dev/null 2>&1 || true
+                else
+                    nice -n 10 cwebp -quiet -q 82 "$file" -o "$out" >/dev/null 2>&1 || true
+                fi
+            fi
+        fi
+        if [[ "$have_avif" == "true" ]]; then
+            out="${file}.avif"
+            if [[ ! -f "$out" || "$file" -nt "$out" ]]; then
+                if [[ "$use_ionice" == "true" ]]; then
+                    ionice -c2 -n7 nice -n 10 avifenc --min 20 --max 30 --speed 6 "$file" "$out" >/dev/null 2>&1 || true
+                else
+                    nice -n 10 avifenc --min 20 --max 30 --speed 6 "$file" "$out" >/dev/null 2>&1 || true
+                fi
+            fi
+        fi
+    done
+}
+
+case "${1:-}" in
+    --all)
+        registry="/var/lib/dazestack-wp/state/domain-registry.json"
+        [[ -f "$registry" ]] || exit 0
+        domains=$(jq -r '.domains | keys[]' "$registry" 2>/dev/null || true)
+        for domain in $domains; do
+            [[ -n "$domain" ]] && optimize_domain "$domain"
+        done
+        ;;
+    *)
+        if [[ -z "${1:-}" ]]; then
+            echo "Usage: $0 <domain> | --all" >&2
+            exit 1
+        fi
+        optimize_domain "$1"
+        ;;
+esac
+IMG_OPT
+
+    chmod +x "$IMAGE_OPTIMIZER_SCRIPT"
+}
+
+install_image_optimization_cron() {
+    if [[ "$ENABLE_IMAGE_OPTIMIZATION" != "true" ]]; then
+        return 0
+    fi
+    write_image_optimizer_script
+    cat > "$IMAGE_OPTIMIZER_CRON_FILE" <<IMG_CRON
+$IMAGE_OPTIMIZER_CRON root $IMAGE_OPTIMIZER_SCRIPT --all >/dev/null 2>&1
+IMG_CRON
+    chmod 644 "$IMAGE_OPTIMIZER_CRON_FILE"
+    log_success "Image optimization cron installed"
+}
+
 write_microcache_config() {
     cat > /etc/nginx/conf.d/10-cache-zones.conf <<'NGINX_CACHE'
 # FastCGI micro-cache zones
@@ -2197,7 +2558,15 @@ fastcgi_cache_path /var/cache/nginx/microcache
     inactive=60m 
     use_temp_path=off;
 
-fastcgi_cache_key "$scheme$request_method$host$request_uri";
+# Cache key segmentation by Accept-Encoding (zstd > br > gzip)
+map $http_accept_encoding $dazestack_cache_encoding {
+    default "identity";
+    "~*zstd" "zstd";
+    "~*br" "br";
+    "~*gzip" "gzip";
+}
+
+fastcgi_cache_key "$scheme$request_method$host$request_uri:$dazestack_cache_encoding";
 fastcgi_cache_use_stale updating error timeout invalid_header http_500 http_503;
 fastcgi_cache_lock on;
 fastcgi_cache_lock_timeout 5s;
@@ -2287,10 +2656,813 @@ local_infile = 0
 MYSQL_PERF
 }
 
+init_nginx_build_state() {
+    mkdir -p "$STATE_DIR"
+    chmod 700 "$STATE_DIR" 2>/dev/null || true
+    if [[ ! -f "$NGINX_BUILD_STATE_FILE" ]]; then
+        cat > "$NGINX_BUILD_STATE_FILE" <<'NGINX_STATE'
+{
+  "build_type": "package",
+  "version": "",
+  "openssl_vendor": "official",
+  "openssl_repo": "",
+  "openssl_ref": "latest-stable",
+  "http3_required": false,
+  "brotli_required": false,
+  "zstd_required": false,
+  "built_http3": false,
+  "built_brotli": false,
+  "built_zstd": false,
+  "last_build_status": "unknown",
+  "last_build_at": 0,
+  "last_build_message": ""
+}
+NGINX_STATE
+        chmod 600 "$NGINX_BUILD_STATE_FILE"
+    fi
+}
+
+load_nginx_build_state() {
+    if [[ ! -f "$NGINX_BUILD_STATE_FILE" ]]; then
+        return 1
+    fi
+    NGINX_BUILD_TYPE=$(jq -r '.build_type // "package"' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "package")
+    NGINX_BUILD_VERSION=$(jq -r '.version // ""' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "")
+    NGINX_QUIC_OPENSSL_VENDOR=$(jq -r '.openssl_vendor // "official"' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "official")
+    NGINX_QUIC_OPENSSL_REPO=$(jq -r '.openssl_repo // ""' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "")
+    NGINX_QUIC_OPENSSL_REF=$(jq -r '.openssl_ref // "latest-stable"' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "latest-stable")
+    NGINX_BUILD_HTTP3_REQUIRED=$(jq -r '.http3_required // false' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "false")
+    NGINX_BUILD_BROTLI_REQUIRED=$(jq -r '.brotli_required // false' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "false")
+    NGINX_BUILD_ZSTD_REQUIRED=$(jq -r '.zstd_required // false' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "false")
+    return 0
+}
+
+write_nginx_build_state() {
+    local build_type=$1
+    local version=$2
+    local http3_req=$3
+    local brotli_req=$4
+    local zstd_req=$5
+    local built_http3=$6
+    local built_brotli=$7
+    local built_zstd=$8
+    local status=$9
+    local message=${10:-""}
+    local openssl_ref_state="${NGINX_QUIC_OPENSSL_REF_REQUESTED:-${NGINX_QUIC_OPENSSL_REF:-}}"
+
+    init_nginx_build_state
+
+    cp "$NGINX_BUILD_STATE_FILE" "${NGINX_BUILD_STATE_FILE}.backup" 2>/dev/null || true
+    if ! jq --arg build_type "$build_type" \
+           --arg version "$version" \
+           --arg openssl_vendor "${NGINX_QUIC_OPENSSL_VENDOR:-}" \
+           --arg openssl_repo "${NGINX_QUIC_OPENSSL_REPO:-}" \
+           --arg openssl_ref "$openssl_ref_state" \
+           --arg http3_req "$http3_req" \
+           --arg brotli_req "$brotli_req" \
+           --arg zstd_req "$zstd_req" \
+           --arg built_http3 "$built_http3" \
+           --arg built_brotli "$built_brotli" \
+           --arg built_zstd "$built_zstd" \
+           --arg status "$status" \
+           --arg message "$message" \
+        '.build_type = $build_type |
+         .version = $version |
+         .openssl_vendor = $openssl_vendor |
+         .openssl_repo = $openssl_repo |
+         .openssl_ref = $openssl_ref |
+         .http3_required = ($http3_req == "true") |
+         .brotli_required = ($brotli_req == "true") |
+         .zstd_required = ($zstd_req == "true") |
+         .built_http3 = ($built_http3 == "true") |
+         .built_brotli = ($built_brotli == "true") |
+         .built_zstd = ($built_zstd == "true") |
+         .last_build_status = $status |
+         .last_build_message = $message |
+         .last_build_at = now' \
+        "$NGINX_BUILD_STATE_FILE" > "${NGINX_BUILD_STATE_FILE}.tmp"; then
+        mv "${NGINX_BUILD_STATE_FILE}.backup" "$NGINX_BUILD_STATE_FILE" 2>/dev/null || true
+        log_warn "Failed to update Nginx build state"
+        return 1
+    fi
+
+    mv "${NGINX_BUILD_STATE_FILE}.tmp" "$NGINX_BUILD_STATE_FILE"
+    rm -f "${NGINX_BUILD_STATE_FILE}.backup" 2>/dev/null || true
+    chmod 600 "$NGINX_BUILD_STATE_FILE" 2>/dev/null || true
+    return 0
+}
+
+ensure_nginx_systemd_service() {
+    if [[ -f /lib/systemd/system/nginx.service || -f /etc/systemd/system/nginx.service ]]; then
+        return 0
+    fi
+    cat > /etc/systemd/system/nginx.service <<'NGINX_UNIT'
+[Unit]
+Description=The NGINX HTTP and reverse proxy server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+PIDFile=/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t -q -g "daemon on; master_process on;"
+ExecStart=/usr/sbin/nginx -g "daemon on; master_process on;"
+ExecReload=/usr/sbin/nginx -g "daemon on; master_process on;" -s reload
+ExecStop=/usr/sbin/nginx -s quit
+TimeoutStopSec=5
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+NGINX_UNIT
+    systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+resolve_nginx_modules_path() {
+    local path=""
+
+    if command -v nginx >/dev/null 2>&1; then
+        path=$(nginx -V 2>&1 | tr ' ' '\n' | awk -F= '/^--modules-path=/{print $2; exit}')
+        if [[ -n "$path" && -d "$path" ]]; then
+            echo "$path"
+            return 0
+        fi
+    fi
+
+    for path in /usr/lib/nginx/modules /usr/lib64/nginx/modules /usr/local/nginx/modules /usr/modules; do
+        if [[ -d "$path" ]]; then
+            echo "$path"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+write_nginx_dynamic_module_conf() {
+    mkdir -p /etc/nginx/modules-enabled 2>/dev/null || true
+
+    local module_dir=""
+    module_dir=$(resolve_nginx_modules_path 2>/dev/null || true)
+
+    if [[ -z "$module_dir" ]]; then
+        rm -f /etc/nginx/modules-enabled/50-mod-http-brotli.conf 2>/dev/null || true
+        rm -f /etc/nginx/modules-enabled/50-mod-http-zstd.conf 2>/dev/null || true
+        rm -f /etc/nginx/modules-enabled/50-mod-http-cache-purge.conf 2>/dev/null || true
+        return 0
+    fi
+
+    local brotli_filter="${module_dir}/ngx_http_brotli_filter_module.so"
+    local brotli_static="${module_dir}/ngx_http_brotli_static_module.so"
+
+    if [[ -f "$brotli_filter" ]]; then
+        cat > /etc/nginx/modules-enabled/50-mod-http-brotli.conf <<BROTLI_CONF
+load_module $brotli_filter;
+load_module $brotli_static;
+BROTLI_CONF
+    else
+        rm -f /etc/nginx/modules-enabled/50-mod-http-brotli.conf 2>/dev/null || true
+    fi
+
+    local zstd_filter="${module_dir}/ngx_http_zstd_filter_module.so"
+    local zstd_static="${module_dir}/ngx_http_zstd_static_module.so"
+
+    if [[ -f "$zstd_filter" ]]; then
+        cat > /etc/nginx/modules-enabled/50-mod-http-zstd.conf <<ZSTD_CONF
+load_module $zstd_filter;
+load_module $zstd_static;
+ZSTD_CONF
+    else
+        rm -f /etc/nginx/modules-enabled/50-mod-http-zstd.conf 2>/dev/null || true
+    fi
+
+    local cache_purge="${module_dir}/ngx_http_cache_purge_module.so"
+    if [[ -f "$cache_purge" ]]; then
+        cat > /etc/nginx/modules-enabled/50-mod-http-cache-purge.conf <<CACHE_PURGE_CONF
+load_module $cache_purge;
+CACHE_PURGE_CONF
+    else
+        rm -f /etc/nginx/modules-enabled/50-mod-http-cache-purge.conf 2>/dev/null || true
+    fi
+}
+
+get_latest_nginx_stable_version() {
+    local page=""
+    if command -v curl >/dev/null 2>&1; then
+        page=$(curl -fsSL https://nginx.org/download/ 2>/dev/null || true)
+    elif command -v wget >/dev/null 2>&1; then
+        page=$(wget -qO- https://nginx.org/download/ 2>/dev/null || true)
+    fi
+    if [[ -z "$page" ]]; then
+        return 1
+    fi
+    local latest
+    latest=$(echo "$page" | grep -oE 'nginx-[0-9]+\.[0-9]+\.[0-9]+' | sed 's/nginx-//' \
+        | awk -F. '($2 % 2) == 0 {print $0}' | sort -V | tail -1)
+    [[ -n "$latest" ]] || return 1
+    echo "$latest"
+    return 0
+}
+
+resolve_nginx_source_version() {
+    local input=${1:-}
+    if [[ -z "$input" || "$input" == "stable" || "$input" == "latest-stable" ]]; then
+        local latest
+        latest=$(get_latest_nginx_stable_version 2>/dev/null || true)
+        if [[ -n "$latest" ]]; then
+            echo "$latest"
+            return 0
+        fi
+        echo "1.28.1"
+        return 0
+    fi
+    echo "$input"
+}
+
+nginx_version_is_older() {
+    local current=$1
+    local latest=$2
+    [[ -z "$current" || -z "$latest" ]] && return 0
+    local first
+    first=$(printf "%s\n%s\n" "$current" "$latest" | sort -V | head -1)
+    [[ "$first" != "$latest" ]]
+}
+
+normalize_openssl_vendor() {
+    local input
+    input=$(echo "${1:-}" | tr '[:upper:]' '[:lower:]' | xargs)
+    case "$input" in
+        official|openssl|ossl|o) echo "official" ;;
+        quictls|quic|q) echo "quictls" ;;
+        "") echo "official" ;;
+        *) echo "" ;;
+    esac
+}
+
+version_is_ge() {
+    local current=$1
+    local minimum=$2
+    [[ -z "$current" || -z "$minimum" ]] && return 1
+    local first
+    first=$(printf "%s\n%s\n" "$current" "$minimum" | sort -V | head -1)
+    [[ "$first" == "$minimum" ]]
+}
+
+openssl_tag_version() {
+    local ref=$1
+    ref=${ref#openssl-}
+    ref=${ref%%-*}
+    echo "$ref"
+}
+
+openssl_ref_is_latest() {
+    local ref=${1:-}
+    case "$ref" in
+        ""|latest|stable|latest-stable) return 0 ;;
+    esac
+    return 1
+}
+
+zstd_static_pic_ok() {
+    local libdir=${1:-}
+    local tmpdir
+    tmpdir=$(mktemp -d 2>/dev/null || echo "")
+    [[ -n "$tmpdir" ]] || return 1
+    cat > "${tmpdir}/zstd_pic_test.c" <<'ZSTD_TEST'
+#include <stddef.h>
+/* Force the linker to pull compression objects from libzstd.a. */
+extern size_t ZSTD_compress(void *dst, size_t dstCapacity,
+                            const void *src, size_t srcSize,
+                            int compressionLevel);
+int zstd_pic_test(void) {
+    return (int)ZSTD_compress(0, 0, 0, 0, 1);
+}
+ZSTD_TEST
+    if ! cc -fPIC -c "${tmpdir}/zstd_pic_test.c" -o "${tmpdir}/zstd_pic_test.o" >/dev/null 2>&1; then
+        rm -rf "$tmpdir"
+        return 1
+    fi
+    local libflags=()
+    [[ -n "$libdir" ]] && libflags+=("-L${libdir}")
+    if cc -shared -o "${tmpdir}/zstd_pic_test.so" "${tmpdir}/zstd_pic_test.o" \
+        "${libflags[@]}" -Wl,--whole-archive -l:libzstd.a -Wl,--no-whole-archive >/dev/null 2>&1; then
+        rm -rf "$tmpdir"
+        return 0
+    fi
+    rm -rf "$tmpdir"
+    return 1
+}
+
+resolve_latest_zstd_ref() {
+    local repo=$1
+    if ! command -v git >/dev/null 2>&1; then
+        return 1
+    fi
+    git ls-remote --tags --refs "$repo" 2>/dev/null | awk -F/ '{print $3}' \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+}
+
+build_zstd_pic() {
+    local jobs=${1:-}
+    local repo="${ZSTD_SOURCE_REPO:-}"
+    local ref="${ZSTD_SOURCE_REF:-}"
+    local prefix="${ZSTD_PIC_PREFIX:-}"
+
+    [[ -z "$repo" || -z "$prefix" ]] && return 1
+    [[ -z "$jobs" ]] && jobs=$(nproc 2>/dev/null || echo 1)
+
+    mkdir -p "$NGINX_SOURCE_BUILD_ROOT" 2>/dev/null || true
+    local src_dir="${NGINX_SOURCE_BUILD_ROOT}/zstd-src"
+
+    if [[ -f "$prefix/lib/libzstd.a" ]] && zstd_static_pic_ok "$prefix/lib"; then
+        log_info "Using existing PIC libzstd.a at $prefix"
+        return 0
+    fi
+
+    if [[ ! -d "$src_dir/.git" ]]; then
+        rm -rf "$src_dir"
+        git clone "$repo" "$src_dir" >/dev/null 2>&1 || return 1
+    fi
+    git -C "$src_dir" fetch --all --tags >/dev/null 2>&1 || true
+
+    if [[ -z "$ref" || "$ref" == "latest" || "$ref" == "latest-stable" ]]; then
+        local latest_ref
+        latest_ref=$(resolve_latest_zstd_ref "$repo" 2>/dev/null || true)
+        if [[ -n "$latest_ref" ]]; then
+            ref="$latest_ref"
+        else
+            ref="v1.5.6"
+            log_warn "Failed to resolve latest Zstd tag; using fallback: $ref"
+        fi
+    fi
+
+    if ! git -C "$src_dir" checkout "$ref" >/dev/null 2>&1; then
+        log_warn "Failed to checkout Zstd ref $ref; using repo default"
+    fi
+
+    log_info "Building Zstd (PIC) from source: $ref"
+    make -C "$src_dir/lib" clean >/dev/null 2>&1 || true
+    if ! make -C "$src_dir/lib" -j"$jobs" CFLAGS="-fPIC -O3" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    mkdir -p "$prefix/lib" "$prefix/include"
+    cp -f "$src_dir/lib/libzstd.a" "$prefix/lib/" 2>/dev/null || return 1
+    cp -f "$src_dir/lib/"*.h "$prefix/include/" 2>/dev/null || true
+
+    zstd_static_pic_ok "$prefix/lib"
+}
+
+brotli_build_pic() {
+    local brotli_dir=$1
+    local jobs=${2:-}
+
+    [[ -z "$brotli_dir" ]] && return 1
+    [[ -z "$jobs" ]] && jobs=$(nproc 2>/dev/null || echo 1)
+
+    local src_dir="${brotli_dir}/deps/brotli"
+    local out_dir="${src_dir}/out"
+    [[ -d "$src_dir" ]] || return 1
+
+    if ! command -v cmake >/dev/null 2>&1; then
+        return 1
+    fi
+
+    cmake -S "$src_dir" -B "$out_dir" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON >/dev/null 2>&1 || return 1
+    cmake --build "$out_dir" --config Release -j"$jobs" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+resolve_latest_openssl_ref() {
+    local repo=$1
+    local vendor=$2
+    local pattern=""
+
+    case "$vendor" in
+        quictls)
+            pattern='refs/tags/openssl-[0-9]+\.[0-9]+\.[0-9]+-quic[0-9]+$'
+            ;;
+        official)
+            pattern='refs/tags/openssl-[0-9]+\.[0-9]+\.[0-9]+$'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    if ! command -v git >/dev/null 2>&1; then
+        return 1
+    fi
+
+    local tag
+    tag=$(git ls-remote --tags --refs "$repo" 2>/dev/null | awk -v pat="$pattern" '
+        $2 ~ pat {
+            sub("refs/tags/", "", $2);
+            print $2
+        }
+    ' | sort -V | tail -1)
+
+    [[ -n "$tag" ]] || return 1
+    echo "$tag"
+    return 0
+}
+
+resolve_quic_openssl_source() {
+    local vendor
+    vendor=$(normalize_openssl_vendor "${NGINX_QUIC_OPENSSL_VENDOR:-official}")
+    if [[ -z "$vendor" ]]; then
+        log_warn "Unknown OpenSSL vendor '${NGINX_QUIC_OPENSSL_VENDOR}'; defaulting to official"
+        vendor="official"
+    fi
+    NGINX_QUIC_OPENSSL_VENDOR="$vendor"
+
+    local desired_ref="${NGINX_QUIC_OPENSSL_REF:-}"
+
+    case "$vendor" in
+        official)
+            [[ -z "${NGINX_QUIC_OPENSSL_REPO}" ]] && NGINX_QUIC_OPENSSL_REPO="$NGINX_QUIC_OPENSSL_REPO_OFFICIAL"
+            [[ -z "$desired_ref" ]] && desired_ref="$NGINX_QUIC_OPENSSL_REF_OFFICIAL"
+            ;;
+        quictls)
+            [[ -z "${NGINX_QUIC_OPENSSL_REPO}" ]] && NGINX_QUIC_OPENSSL_REPO="$NGINX_QUIC_OPENSSL_REPO_QUIC"
+            [[ -z "$desired_ref" ]] && desired_ref="$NGINX_QUIC_OPENSSL_REF_QUIC"
+            ;;
+    esac
+
+    NGINX_QUIC_OPENSSL_REF_REQUESTED=""
+    if openssl_ref_is_latest "$desired_ref"; then
+        NGINX_QUIC_OPENSSL_REF_REQUESTED="latest-stable"
+        local resolved=""
+        resolved=$(resolve_latest_openssl_ref "$NGINX_QUIC_OPENSSL_REPO" "$vendor" 2>/dev/null || true)
+        if [[ -n "$resolved" ]]; then
+            desired_ref="$resolved"
+        else
+            if [[ "$vendor" == "official" ]]; then
+                desired_ref="$NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLBACK"
+            else
+                desired_ref="$NGINX_QUIC_OPENSSL_REF_QUIC_FALLBACK"
+            fi
+            log_warn "Failed to resolve latest OpenSSL tag; using fallback: $desired_ref"
+        fi
+    fi
+
+    if [[ "$vendor" == "official" && -n "$desired_ref" ]]; then
+        local min_version="${NGINX_QUIC_OPENSSL_MIN_VERSION:-3.5.1}"
+        local desired_version
+        desired_version=$(openssl_tag_version "$desired_ref")
+        if [[ -n "$desired_version" ]] && ! version_is_ge "$desired_version" "$min_version"; then
+            log_warn "OpenSSL ref $desired_ref is below minimum $min_version; using $NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLBACK"
+            desired_ref="$NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLBACK"
+        fi
+    fi
+
+    NGINX_QUIC_OPENSSL_REF="$desired_ref"
+}
+
+build_nginx_from_source() {
+    local version=$1
+    [[ -z "$version" ]] && {
+        log_error "Nginx source build version is required"
+        return 1
+    }
+
+    local build_log=""
+    local log_hint=""
+    if [[ "$LOG_FILE_OUTPUT_ENABLED" == "true" ]]; then
+        ensure_log_dir || true
+        build_log="$LOG_DEBUG_FILE"
+        log_hint=" (see $LOG_DEBUG_FILE)"
+        {
+            echo ""
+            echo "===== Nginx source build $(date '+%Y-%m-%d %H:%M:%S %Z') ====="
+            echo "Version: $version"
+            echo "HTTP/3: $ENABLE_HTTP3 | Brotli: $ENABLE_BROTLI | Zstd: $ENABLE_ZSTD"
+        } >> "$build_log" 2>/dev/null || true
+    fi
+
+    log_info "Preparing source build for Nginx $version"
+    safe_apt_install build-essential ca-certificates curl git perl cmake \
+        libpcre3-dev zlib1g-dev libssl-dev libbrotli-dev libzstd-dev \
+        libxslt1-dev libgd-dev pkg-config >/dev/null 2>&1 || {
+        log_error "Failed to install Nginx build dependencies"
+        return 1
+    }
+
+    local make_jobs
+    make_jobs=$(nproc 2>/dev/null || echo 1)
+    local ram_mb=${SYSTEM_RAM_MB:-0}
+    if [[ $ram_mb -le 0 ]]; then
+        if command -v free &>/dev/null; then
+            ram_mb=$(free -m 2>/dev/null | awk 'NR==2 {print $2}')
+        else
+            ram_mb=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+        fi
+    fi
+    if [[ $ram_mb -gt 0 ]]; then
+        if [[ $ram_mb -lt 1500 ]]; then
+            make_jobs=1
+        elif [[ $ram_mb -lt 3000 ]]; then
+            make_jobs=2
+        elif [[ $ram_mb -lt 6000 ]]; then
+            make_jobs=4
+        fi
+    fi
+    if [[ -n "${NGINX_BUILD_JOBS:-}" ]]; then
+        make_jobs="$NGINX_BUILD_JOBS"
+    fi
+    log_info "Nginx build jobs: $make_jobs (RAM: ${ram_mb}MB)"
+
+    local cc_opt=""
+    local ld_opt=""
+
+    if [[ "$ENABLE_ZSTD" == "true" ]]; then
+        if zstd_static_pic_ok; then
+            log_debug "libzstd.a is PIC; using system static lib"
+        elif [[ "$ZSTD_BUILD_PIC" == "true" ]] && build_zstd_pic "$make_jobs"; then
+            if zstd_static_pic_ok "${ZSTD_PIC_PREFIX}/lib"; then
+                cc_opt+=" -I${ZSTD_PIC_PREFIX}/include"
+                ld_opt+=" -L${ZSTD_PIC_PREFIX}/lib"
+                log_info "Using PIC libzstd.a from ${ZSTD_PIC_PREFIX}"
+            else
+                log_warn "Built libzstd.a is still not PIC; disabling Zstd module"
+                ENABLE_ZSTD="false"
+            fi
+        else
+            log_warn "libzstd.a is not PIC (shared module link fails); disabling Zstd module"
+            ENABLE_ZSTD="false"
+        fi
+    fi
+
+    mkdir -p "$NGINX_SOURCE_BUILD_ROOT"
+    local src_tar="${NGINX_SOURCE_BUILD_ROOT}/nginx-${version}.tar.gz"
+    local src_dir="${NGINX_SOURCE_BUILD_ROOT}/nginx-${version}"
+    local brotli_dir="${NGINX_SOURCE_BUILD_ROOT}/ngx_brotli"
+    local zstd_dir="${NGINX_SOURCE_BUILD_ROOT}/zstd-nginx-module"
+    local openssl_dir="${NGINX_SOURCE_BUILD_ROOT}/openssl-quic"
+
+    rm -rf "$src_dir"
+    if ! curl -fsSL "https://nginx.org/download/nginx-${version}.tar.gz" -o "$src_tar"; then
+        log_error "Failed to download Nginx source tarball"
+        return 1
+    fi
+    tar -xzf "$src_tar" -C "$NGINX_SOURCE_BUILD_ROOT" || {
+        log_error "Failed to extract Nginx source"
+        return 1
+    }
+
+    if [[ "$ENABLE_BROTLI" == "true" ]]; then
+        if [[ ! -d "$brotli_dir/.git" ]]; then
+            rm -rf "$brotli_dir"
+            git clone "$NGINX_BROTLI_REPO" "$brotli_dir" >/dev/null 2>&1 || {
+                log_warn "Failed to clone Brotli module; continuing without Brotli"
+            }
+        fi
+        if [[ -d "$brotli_dir/.git" ]]; then
+            git -C "$brotli_dir" fetch --all >/dev/null 2>&1 || true
+            git -C "$brotli_dir" checkout "$NGINX_BROTLI_REF" >/dev/null 2>&1 || true
+            git -C "$brotli_dir" submodule update --init --recursive >/dev/null 2>&1 || true
+        fi
+        if [[ "$BROTLI_BUILD_PIC" == "true" ]] && [[ -d "$brotli_dir/deps/brotli" ]]; then
+            if brotli_build_pic "$brotli_dir" "$make_jobs"; then
+                log_info "Brotli static libs built with -fPIC"
+            else
+                log_warn "Failed to prebuild Brotli libs with -fPIC; continuing with module defaults"
+            fi
+        fi
+    fi
+
+    if [[ "$ENABLE_ZSTD" == "true" ]]; then
+        if [[ ! -d "$zstd_dir/.git" ]]; then
+            rm -rf "$zstd_dir"
+            git clone "$NGINX_ZSTD_REPO" "$zstd_dir" >/dev/null 2>&1 || {
+                log_warn "Failed to clone Zstd module; continuing without Zstd"
+            }
+        fi
+        if [[ -d "$zstd_dir/.git" ]]; then
+            git -C "$zstd_dir" fetch --all >/dev/null 2>&1 || true
+            git -C "$zstd_dir" checkout "$NGINX_ZSTD_REF" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    local with_quic_opts=()
+    if [[ "$ENABLE_HTTP3" == "true" ]]; then
+        resolve_quic_openssl_source
+        if [[ -z "$NGINX_QUIC_OPENSSL_REPO" || -z "$NGINX_QUIC_OPENSSL_REF" ]]; then
+            log_error "OpenSSL QUIC repo/ref not set${log_hint}"
+            return 1
+        fi
+
+        log_info "Using OpenSSL QUIC source: ${NGINX_QUIC_OPENSSL_VENDOR} ($NGINX_QUIC_OPENSSL_REPO @ $NGINX_QUIC_OPENSSL_REF)"
+        if [[ -n "$build_log" ]]; then
+            {
+                echo "OpenSSL vendor: $NGINX_QUIC_OPENSSL_VENDOR"
+                echo "OpenSSL repo: $NGINX_QUIC_OPENSSL_REPO"
+                echo "OpenSSL ref: $NGINX_QUIC_OPENSSL_REF"
+            } >> "$build_log" 2>/dev/null || true
+        fi
+
+        if [[ -d "$openssl_dir/.git" ]]; then
+            local origin_url
+            origin_url=$(git -C "$openssl_dir" remote get-url origin 2>/dev/null || true)
+            if [[ -n "$origin_url" && "$origin_url" != "$NGINX_QUIC_OPENSSL_REPO" ]]; then
+                log_warn "OpenSSL repo changed; re-cloning"
+                rm -rf "$openssl_dir"
+            fi
+        fi
+
+        if [[ ! -d "$openssl_dir/.git" ]]; then
+            rm -rf "$openssl_dir"
+            if [[ -n "$build_log" ]]; then
+                git clone "$NGINX_QUIC_OPENSSL_REPO" "$openssl_dir" >> "$build_log" 2>&1 || {
+                    log_error "Failed to clone OpenSSL repo${log_hint}"
+                    return 1
+                }
+            else
+                git clone "$NGINX_QUIC_OPENSSL_REPO" "$openssl_dir" || {
+                    log_error "Failed to clone OpenSSL repo"
+                    return 1
+                }
+            fi
+        fi
+
+        if [[ -n "$build_log" ]]; then
+            git -C "$openssl_dir" fetch --all --tags >> "$build_log" 2>&1 || {
+                log_error "Failed to fetch OpenSSL refs${log_hint}"
+                return 1
+            }
+        else
+            git -C "$openssl_dir" fetch --all --tags || {
+                log_error "Failed to fetch OpenSSL refs"
+                return 1
+            }
+        fi
+
+        if ! git -C "$openssl_dir" rev-parse --verify --quiet "${NGINX_QUIC_OPENSSL_REF}^{commit}" 2>/dev/null; then
+            log_error "OpenSSL ref not found: $NGINX_QUIC_OPENSSL_REF in $NGINX_QUIC_OPENSSL_REPO"
+            return 1
+        fi
+
+        if [[ -n "$build_log" ]]; then
+            git -C "$openssl_dir" checkout "$NGINX_QUIC_OPENSSL_REF" >> "$build_log" 2>&1 || {
+                log_error "Failed to checkout OpenSSL ref${log_hint}"
+                return 1
+            }
+        else
+            git -C "$openssl_dir" checkout "$NGINX_QUIC_OPENSSL_REF" || {
+                log_error "Failed to checkout OpenSSL ref"
+                return 1
+            }
+        fi
+
+        with_quic_opts=(--with-openssl="${openssl_dir}" --with-http_v3_module)
+    fi
+
+    local add_modules=()
+    if [[ -d "$brotli_dir/.git" ]]; then
+        add_modules+=("--add-dynamic-module=${brotli_dir}")
+    fi
+    if [[ -d "$zstd_dir/.git" ]]; then
+        add_modules+=("--add-dynamic-module=${zstd_dir}")
+    fi
+
+    local cc_opt_arg=()
+    local ld_opt_arg=()
+    [[ -n "$cc_opt" ]] && cc_opt_arg=(--with-cc-opt="$cc_opt")
+    [[ -n "$ld_opt" ]] && ld_opt_arg=(--with-ld-opt="$ld_opt")
+
+    pushd "$src_dir" >/dev/null || return 1
+    if [[ -n "$build_log" ]]; then
+        ./configure \
+            --prefix=/usr \
+            --sbin-path=/usr/sbin/nginx \
+            --conf-path=/etc/nginx/nginx.conf \
+            --modules-path=/usr/lib/nginx/modules \
+            --error-log-path=/var/log/nginx/error.log \
+            --http-log-path=/var/log/nginx/access.log \
+            --pid-path=/run/nginx.pid \
+            --lock-path=/var/lock/nginx.lock \
+            --user=www-data \
+            --group=www-data \
+            --with-compat \
+            --with-threads \
+            --with-file-aio \
+            --with-http_ssl_module \
+            --with-http_v2_module \
+            --with-http_gzip_static_module \
+            --with-http_stub_status_module \
+            --with-http_realip_module \
+            --with-http_auth_request_module \
+            --with-http_slice_module \
+            --with-http_image_filter_module=dynamic \
+            "${cc_opt_arg[@]}" \
+            "${ld_opt_arg[@]}" \
+            "${with_quic_opts[@]}" \
+            "${add_modules[@]}" >> "$build_log" 2>&1 || {
+            popd >/dev/null || true
+            log_error "Nginx configure failed${log_hint}"
+            return 1
+        }
+    else
+        ./configure \
+            --prefix=/usr \
+            --sbin-path=/usr/sbin/nginx \
+            --conf-path=/etc/nginx/nginx.conf \
+            --modules-path=/usr/lib/nginx/modules \
+            --error-log-path=/var/log/nginx/error.log \
+            --http-log-path=/var/log/nginx/access.log \
+            --pid-path=/run/nginx.pid \
+            --lock-path=/var/lock/nginx.lock \
+            --user=www-data \
+            --group=www-data \
+            --with-compat \
+            --with-threads \
+            --with-file-aio \
+            --with-http_ssl_module \
+            --with-http_v2_module \
+            --with-http_gzip_static_module \
+            --with-http_stub_status_module \
+            --with-http_realip_module \
+            --with-http_auth_request_module \
+            --with-http_slice_module \
+            --with-http_image_filter_module=dynamic \
+            "${cc_opt_arg[@]}" \
+            "${ld_opt_arg[@]}" \
+            "${with_quic_opts[@]}" \
+            "${add_modules[@]}" || {
+            popd >/dev/null || true
+            log_error "Nginx configure failed"
+            return 1
+        }
+    fi
+
+    if [[ -n "$build_log" ]]; then
+        make -j"$make_jobs" >> "$build_log" 2>&1 || {
+            popd >/dev/null || true
+            log_error "Nginx build failed${log_hint}"
+            return 1
+        }
+    else
+        make -j"$make_jobs" || {
+            popd >/dev/null || true
+            log_error "Nginx build failed"
+            return 1
+        }
+    fi
+
+    if [[ -n "$build_log" ]]; then
+        make install >> "$build_log" 2>&1 || {
+            popd >/dev/null || true
+            log_error "Nginx install failed${log_hint}"
+            return 1
+        }
+    else
+        make install || {
+            popd >/dev/null || true
+            log_error "Nginx install failed"
+            return 1
+        }
+    fi
+    popd >/dev/null || true
+
+    write_nginx_dynamic_module_conf
+    ensure_nginx_systemd_service
+    return 0
+}
+
+detect_bbr_support() {
+    local available
+    available=$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)
+    if echo "$available" | grep -qw bbr; then
+        return 0
+    fi
+    if command -v modprobe >/dev/null 2>&1; then
+        if modprobe tcp_bbr >/dev/null 2>&1; then
+            available=$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)
+            if echo "$available" | grep -qw bbr; then
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
 apply_sysctl_tuning() {
     if [[ "$ENABLE_SYSCTL_TUNING" != "true" ]]; then
         return 0
     fi
+
+    local bbr_enabled="false"
+    if [[ "$ENABLE_BBR" == "true" ]]; then
+        if detect_bbr_support; then
+            bbr_enabled="true"
+        else
+            log_warn "BBR congestion control not available; skipping"
+        fi
+    fi
+
     cat > /etc/sysctl.d/99-wp-performance.conf <<'SYSCTL'
 fs.file-max = 1048576
 net.core.somaxconn = 65535
@@ -2301,7 +3473,18 @@ net.ipv4.tcp_keepalive_time = 600
 net.ipv4.tcp_tw_reuse = 1
 net.ipv4.ip_local_port_range = 1024 65000
 SYSCTL
+
+    if [[ "$bbr_enabled" == "true" ]]; then
+        cat >> /etc/sysctl.d/99-wp-performance.conf <<'SYSCTL_BBR'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+SYSCTL_BBR
+    fi
+
     sysctl --system >/dev/null 2>&1 || true
+    if [[ "$bbr_enabled" == "true" ]]; then
+        log_success "BBR congestion control enabled"
+    fi
     log_success "Sysctl performance tuning applied"
 }
 
@@ -2331,6 +3514,102 @@ AUTO_TUNE_CRON
     log_success "Auto-tune cron installed"
 }
 
+enable_nginx_auto_update() {
+    install_cli_wrapper
+    cat > "$NGINX_AUTO_UPDATE_SCRIPT" <<NGINX_AUTO
+#!/bin/bash
+set -euo pipefail
+${CLI_WRAPPER} nginx-auto-update --run >/dev/null 2>&1 || true
+NGINX_AUTO
+    chmod +x "$NGINX_AUTO_UPDATE_SCRIPT"
+    cat > "$NGINX_AUTO_UPDATE_CRON" <<NGINX_CRON
+$NGINX_AUTO_UPDATE_SCHEDULE root $NGINX_AUTO_UPDATE_SCRIPT
+NGINX_CRON
+    chmod 644 "$NGINX_AUTO_UPDATE_CRON"
+    log_success "Nginx auto-update cron installed"
+}
+
+disable_nginx_auto_update() {
+    rm -f "$NGINX_AUTO_UPDATE_CRON" "$NGINX_AUTO_UPDATE_SCRIPT" 2>/dev/null || true
+    log_success "Nginx auto-update cron removed"
+}
+
+get_nginx_auto_update_schedule() {
+    if [[ -f "$NGINX_AUTO_UPDATE_CRON" ]]; then
+        local line
+        line=$(grep -v '^[[:space:]]*#' "$NGINX_AUTO_UPDATE_CRON" 2>/dev/null | head -1 || true)
+        if [[ -n "$line" ]]; then
+            echo "$line" | awk '{print $1, $2, $3, $4, $5}'
+            return 0
+        fi
+    fi
+    echo "$NGINX_AUTO_UPDATE_SCHEDULE"
+}
+
+nginx_auto_update_status() {
+    local schedule
+    schedule=$(get_nginx_auto_update_schedule 2>/dev/null || echo "$NGINX_AUTO_UPDATE_SCHEDULE")
+    if [[ -f "$NGINX_AUTO_UPDATE_CRON" ]]; then
+        echo "Nginx auto-update: enabled ($NGINX_AUTO_UPDATE_CRON)"
+        echo "Schedule: $schedule"
+    else
+        echo "Nginx auto-update: disabled"
+        echo "Schedule: $schedule"
+    fi
+}
+
+run_nginx_auto_update() {
+    check_root
+    load_nginx_build_state || {
+        log_warn "Nginx build state not found; skipping auto-update"
+        return 1
+    }
+    if [[ "${NGINX_BUILD_TYPE}" != "source" ]]; then
+        log_info "Nginx build type is not source; skipping auto-update"
+        return 0
+    fi
+
+    local latest
+    latest=$(get_latest_nginx_stable_version 2>/dev/null || true)
+    if [[ -z "$latest" ]]; then
+        log_warn "Failed to detect latest stable Nginx version"
+        return 1
+    fi
+
+    local current="${NGINX_BUILD_VERSION:-}"
+    if [[ -n "$current" ]] && ! nginx_version_is_older "$current" "$latest"; then
+        log_info "Nginx is already up-to-date (current: $current, latest stable: $latest)"
+        return 0
+    fi
+
+    ENABLE_NGINX_SOURCE_BUILD="true"
+    NGINX_SOURCE_VERSION="$latest"
+    ENABLE_HTTP3="$NGINX_BUILD_HTTP3_REQUIRED"
+    ENABLE_BROTLI="$NGINX_BUILD_BROTLI_REQUIRED"
+    ENABLE_ZSTD="$NGINX_BUILD_ZSTD_REQUIRED"
+
+    log_info "Auto-update: rebuilding Nginx $latest (stable)"
+    if build_nginx_from_source "$latest"; then
+        detect_http3_support
+        detect_brotli_support
+        detect_zstd_support
+        write_nginx_build_state "source" "$latest" \
+            "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+            "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+            "success" "auto-update"
+        systemctl restart nginx >/dev/null 2>&1 || true
+        log_success "Auto-update completed (Nginx $latest)"
+        return 0
+    fi
+
+    log_warn "Auto-update failed; keeping current version"
+    write_nginx_build_state "source" "$current" \
+        "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+        "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+        "failed" "auto-update failed"
+    return 1
+}
+
 apply_auto_tuning() {
     log_section "Auto-Tune: Adaptive Optimization"
     set_log_context "AUTO-TUNE"
@@ -2339,6 +3618,7 @@ apply_auto_tuning() {
     detect_php_version || true
 
     if [[ -d /etc/nginx ]]; then
+        write_nginx_dynamic_module_conf
         detect_http3_support
         detect_brotli_support
         detect_zstd_support
@@ -2347,7 +3627,10 @@ apply_auto_tuning() {
         write_nginx_security_snippet
         write_nginx_performance_snippet
         write_nginx_http3_snippet
+        write_nginx_image_optimization_map
+        write_nginx_image_optimization_snippet
         write_nginx_rate_limits
+        write_nginx_visibility_config
         nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
     fi
 
@@ -2370,7 +3653,6 @@ apply_auto_tuning() {
     rebalance_php_pools || true
     log_success "Auto-tune completed"
 }
-
 get_total_sites() {
     local registry="$REGISTRY_FILE"
     if [[ ! -f "$registry" ]]; then
@@ -2671,12 +3953,32 @@ CERTBOT_ROLLBACK
 phase_nginx() {
     log_section "Phase 4: Nginx Web Server"
     set_log_context "Phase-4" "Nginx"
-    
-    safe_apt_install nginx || exit 1
-    systemctl enable nginx
 
-    install_nginx_optional_modules
+    local used_source_build="false"
+    if [[ "$ENABLE_NGINX_SOURCE_BUILD" == "true" ]]; then
+        if [[ -z "$NGINX_SOURCE_VERSION" ]]; then
+            log_warn "NGINX_SOURCE_VERSION not set; skipping source build"
+        else
+            if build_nginx_from_source "$NGINX_SOURCE_VERSION"; then
+                used_source_build="true"
+                systemctl enable nginx >/dev/null 2>&1 || true
+                log_success "Nginx source build completed"
+            else
+                log_warn "Nginx source build failed; falling back to package install"
+            fi
+        fi
+    fi
 
+    if [[ "$used_source_build" != "true" ]]; then
+        ensure_ondrej_nginx_mainline || log_warn "Proceeding with default Nginx repository"
+        safe_apt_install nginx || exit 1
+        systemctl enable nginx
+        install_nginx_optional_modules
+    fi
+
+    install_image_optimization_tools
+
+    write_nginx_dynamic_module_conf
     detect_http3_support
     detect_brotli_support
     detect_zstd_support
@@ -2685,7 +3987,11 @@ phase_nginx() {
     write_nginx_security_snippet
     write_nginx_performance_snippet
     write_nginx_http3_snippet
+    write_nginx_image_optimization_map
+    write_nginx_image_optimization_snippet
     write_nginx_rate_limits
+    write_nginx_visibility_config
+    install_image_optimization_cron
     
     # Cloudflare integration
     configure_cloudflare_realip || log_warn "Cloudflare real IP configuration not applied"
@@ -2696,11 +4002,29 @@ phase_nginx() {
         exit 1
     fi
     systemctl restart nginx >/dev/null 2>&1 || true
+
+    if [[ "$used_source_build" == "true" ]]; then
+        write_nginx_build_state "source" "$NGINX_SOURCE_VERSION" \
+            "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+            "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+            "success" "source build"
+        if [[ "$ENABLE_NGINX_AUTO_UPDATE" == "true" ]]; then
+            enable_nginx_auto_update || log_warn "Failed to enable Nginx auto-update"
+        else
+            disable_nginx_auto_update || true
+        fi
+    else
+        local pkg_version=""
+        pkg_version=$(nginx -v 2>&1 | awk -F/ '{print $2}' | tr -d "\r" || true)
+        write_nginx_build_state "package" "$pkg_version" \
+            "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+            "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+            "success" "package install"
+    fi
     
     log_success "Nginx configured with security safeguards"
     PHASE_CURRENT=4
 }
-
 phase_mariadb() {
     log_section "Phase 5: MariaDB Database Server"
     set_log_context "Phase-5" "MariaDB"
@@ -3323,6 +4647,34 @@ phase_health_check() {
         log_error "Nginx configuration INVALID"
         critical_failed=true
     fi
+
+    # Check 7b: Nginx build expectations (if source build selected)
+    if [[ -f "$NGINX_BUILD_STATE_FILE" ]]; then
+        load_nginx_build_state || true
+        if [[ "${NGINX_BUILD_TYPE:-package}" == "source" ]]; then
+            ((++checks_total))
+            if nginx -V 2>&1 | grep -qi "http_v3_module"; then
+                log_success "HTTP/3 module present in Nginx build"
+                ((++checks_passed))
+            else
+                log_warn "HTTP/3 module missing in Nginx build"
+            fi
+            ((++checks_total))
+            if nginx_module_enabled "brotli"; then
+                log_success "Brotli module loaded"
+                ((++checks_passed))
+            else
+                log_warn "Brotli module not loaded"
+            fi
+            ((++checks_total))
+            if nginx_module_enabled "zstd"; then
+                log_success "Zstd module loaded"
+                ((++checks_passed))
+            else
+                log_warn "Zstd module not loaded"
+            fi
+        fi
+    fi
     
     # Check 8: Disk Space
     ((++checks_total))
@@ -3409,6 +4761,9 @@ phase_summary() {
     echo "  - Full page caching enabled (Nginx microcache)"
     echo "  - Auto-tune engine + cron scheduling"
     echo "  - HTTP/2 (HTTP/3 when supported by Nginx build)"
+    echo "  - CDN integration ready (per-site optional)"
+    echo "  - Image optimization ready (AVIF/WebP variants)"
+    echo "  - TCP BBR enabled when available"
     echo ""
     echo "Management Commands:"
     echo "  $SCRIPT_NAME menu                    # Interactive menu"
@@ -3424,6 +4779,16 @@ phase_summary() {
     echo "  $SCRIPT_NAME show-credentials <domain> # View site credentials"
     echo "  $SCRIPT_NAME rebalance-pools          # Rebalance PHP-FPM pools"
     echo "  $SCRIPT_NAME update-cloudflare-ips    # Refresh Cloudflare IP allowlist"
+    echo "  $SCRIPT_NAME cdn-enable <domain> <url> [provider] # Enable CDN for a site"
+    echo "  $SCRIPT_NAME cdn-disable <domain>     # Disable CDN for a site"
+    echo "  $SCRIPT_NAME cdn-status <domain>      # Show CDN status for a site"
+    echo "  $SCRIPT_NAME flush-object-cache       # Flush Redis object cache for all sites"
+    echo "  $SCRIPT_NAME optimize-images <domain|--all> # Generate AVIF/WebP variants"
+    echo "  $SCRIPT_NAME nginx-source-build <version|stable> # Build Nginx from source"
+    echo "  $SCRIPT_NAME rebuild-nginx            # Rebuild source-built Nginx"
+    echo "  $SCRIPT_NAME nginx-auto-update --enable|--disable|--run|--status"
+    echo "  $SCRIPT_NAME enable-http3-all         # Enable HTTP/3 for all SSL vhosts"
+    echo "  $SCRIPT_NAME upgrade-sites            # Apply new features to existing sites"
     echo "  $SCRIPT_NAME remove-old-backups [days] # Remove backups older than N days"
     echo "  $SCRIPT_NAME compression-status       # Show gzip/brotli/zstd status"
     echo "  $SCRIPT_NAME factory-reset            # Remove stack, data, and configs"
@@ -3464,19 +4829,558 @@ maybe_enable_http3_for_site() {
     [[ "$HTTP3_AVAILABLE" != "true" ]] && return 0
     [[ ! -f "$conf" ]] && return 0
 
-    if grep -q "listen 443 ssl" "$conf"; then
-        if grep -q "listen 443 ssl;" "$conf" && ! grep -q "listen 443 ssl http2" "$conf"; then
-            sed -i "s/listen 443 ssl;/listen 443 ssl http2;/" "$conf"
-        fi
-        if ! grep -q "listen 443 quic" "$conf"; then
-            sed -i "/listen 443 ssl/a\\    listen 443 quic reuseport;" "$conf"
-        fi
-        if ! grep -q "Alt-Svc" "$conf"; then
-            sed -i "/listen 443 ssl/a\\    add_header Alt-Svc 'h3=\\\":443\\\"; ma=86400' always;" "$conf"
-        fi
+    if enable_http3_for_vhost_file "$conf"; then
+        nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
+    fi
+}
+
+enable_http3_for_vhost_file() {
+    local conf=$1
+    [[ -f "$conf" ]] || return 1
+
+    if ! grep -qE 'listen[[:space:]]+443[[:space:]]+ssl' "$conf"; then
+        return 1
     fi
 
+    local tmp="${conf}.tmp"
+    local enable_hq="${ENABLE_HTTP3_HQ:-false}"
+    local enable_quic="${ENABLE_QUIC_TUNING:-true}"
+    local enable_early="${ENABLE_TLS_EARLY_DATA:-false}"
+
+    if awk -v enable_hq="$enable_hq" -v enable_quic="$enable_quic" -v enable_early="$enable_early" '
+        function reset_flags() {
+            has_ssl=0; has_ssl6=0; has_http2=0; has_quic=0; has_quic6=0;
+            has_alt=0; has_alt29=0; has_alt_hq=0;
+            has_http3_hq=0; has_quic_retry=0; has_quic_gso=0; has_early=0;
+        }
+        function scan_block() {
+            reset_flags();
+            for (i=1; i<=n; i++) {
+                line=buf[i];
+                if (line ~ /listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl/) {
+                    has_ssl=1;
+                    if (line ~ /\[::\]:443/) { has_ssl6=1; }
+                }
+                if (line ~ /http2[[:space:]]+on;/ || line ~ /listen[[:space:]]+[^;]*443[^;]*http2/) {
+                    has_http2=1;
+                }
+                if (line ~ /listen[[:space:]]+443[[:space:]]+quic/) { has_quic=1; }
+                if (line ~ /listen[[:space:]]+\[::\]:443[[:space:]]+quic/) { has_quic6=1; }
+                if (line ~ /Alt-Svc/ && line ~ /h3=/) { has_alt=1; }
+                if (line ~ /Alt-Svc/ && line ~ /h3-29/) { has_alt29=1; }
+                if (line ~ /Alt-Svc/ && line ~ /hq-/) { has_alt_hq=1; }
+                if (line ~ /http3_hq[[:space:]]+on;/) { has_http3_hq=1; }
+                if (line ~ /quic_retry[[:space:]]+/) { has_quic_retry=1; }
+                if (line ~ /quic_gso[[:space:]]+/) { has_quic_gso=1; }
+                if (line ~ /ssl_early_data[[:space:]]+/) { has_early=1; }
+            }
+        }
+        function output_block() {
+            if (has_ssl == 0) {
+                for (i=1; i<=n; i++) print buf[i];
+                return;
+            }
+            inserted=0;
+            sq = sprintf("%c", 39);
+            for (i=1; i<=n; i++) {
+                line=buf[i];
+                print line;
+                if (!inserted && line ~ /listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl/) {
+                    match(line, /^[[:space:]]*/);
+                    indent=substr(line, RSTART, RLENGTH);
+                    if (!has_http2) print indent "http2 on;";
+                    if (!has_quic) print indent "listen 443 quic reuseport;";
+                    if (has_ssl6 && !has_quic6) print indent "listen [::]:443 quic reuseport;";
+                    if (!has_alt) print indent "add_header Alt-Svc " sq "h3=\":443\"; ma=86400" sq " always;";
+                    if (!has_alt29) print indent "add_header Alt-Svc " sq "h3-29=\":443\"; ma=86400" sq " always;";
+                    if (enable_hq == "true") {
+                        if (!has_http3_hq) print indent "http3_hq on;";
+                        if (!has_alt_hq) print indent "add_header Alt-Svc " sq "hq-29=\":443\"; ma=86400" sq " always;";
+                    }
+                    if (enable_quic == "true") {
+                        if (!has_quic_retry) print indent "quic_retry on;";
+                        if (!has_quic_gso) print indent "quic_gso on;";
+                    }
+                    if (enable_early == "true" && !has_early) print indent "ssl_early_data on;";
+                    inserted=1;
+                }
+            }
+        }
+        function flush_block() {
+            scan_block();
+            output_block();
+        }
+        BEGIN { n=0; depth=0; in_server=0; pending=0; }
+        {
+            line=$0;
+            if (!in_server && pending==0) {
+                if (line ~ /^[[:space:]]*server\b/) {
+                    pending=1;
+                    n=0;
+                    buf[++n]=line;
+                    open_braces=gsub(/{/, "{", line);
+                    close_braces=gsub(/}/, "}", line);
+                    depth += open_braces - close_braces;
+                    if (open_braces > 0) { in_server=1; pending=0; }
+                    if (!in_server) { next; }
+                } else {
+                    print line;
+                    next;
+                }
+            } else if (pending==1 && !in_server) {
+                buf[++n]=line;
+                open_braces=gsub(/{/, "{", line);
+                close_braces=gsub(/}/, "}", line);
+                depth += open_braces - close_braces;
+                if (open_braces > 0) { in_server=1; pending=0; }
+                if (!in_server) { next; }
+            } else if (in_server) {
+                buf[++n]=line;
+                open_braces=gsub(/{/, "{", line);
+                close_braces=gsub(/}/, "}", line);
+                depth += open_braces - close_braces;
+                if (depth == 0) {
+                    flush_block();
+                    n=0; in_server=0; pending=0;
+                }
+                next;
+            }
+            if (in_server && depth == 0) {
+                flush_block();
+                n=0; in_server=0; pending=0;
+            }
+        }
+        END {
+            if (pending==1 && n>0) {
+                for (i=1; i<=n; i++) print buf[i];
+            } else if (in_server && n>0) {
+                flush_block();
+            }
+        }
+    ' "$conf" > "$tmp"; then
+        if cmp -s "$conf" "$tmp"; then
+            rm -f "$tmp"
+            return 1
+        fi
+        if [[ -s "$tmp" ]]; then
+            mv "$tmp" "$conf"
+            return 0
+        fi
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+enable_http3_for_all_ssl_vhosts() {
+    detect_http3_support
+    if [[ "$HTTP3_AVAILABLE" != "true" ]]; then
+        log_warn "HTTP/3 not supported by current Nginx build"
+        return 1
+    fi
+
+    local conf
+    local changed=()
+    local backups=()
+
+    local -A seen=()
+    local candidates=()
+    local search_paths=(
+        /etc/nginx/sites-available/*.conf
+        /etc/nginx/sites-enabled/*.conf
+        /etc/nginx/conf.d/*.conf
+    )
+
+    for conf in "${search_paths[@]}"; do
+        [[ -f "$conf" ]] || continue
+        local real
+        real=$(readlink -f "$conf" 2>/dev/null || echo "$conf")
+        [[ -z "$real" ]] && real="$conf"
+        if [[ -z "${seen[$real]:-}" ]]; then
+            seen["$real"]=1
+            candidates+=("$real")
+        fi
+    done
+
+    for conf in "${candidates[@]}"; do
+        [[ -f "$conf" ]] || continue
+        if grep -qE 'listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl' "$conf"; then
+            cp "$conf" "${conf}.bak.http3" 2>/dev/null || true
+            if enable_http3_for_vhost_file "$conf"; then
+                changed+=("$conf")
+                backups+=("${conf}.bak.http3")
+            else
+                rm -f "${conf}.bak.http3" 2>/dev/null || true
+            fi
+        fi
+    done
+
+    if [[ ${#changed[@]} -eq 0 ]]; then
+        log_info "No SSL vhosts updated (already patched or none found)"
+        return 0
+    fi
+
+    local test_output=""
+    if test_output=$(nginx -t 2>&1); then
+        systemctl reload nginx >/dev/null 2>&1 || true
+        for conf in "${backups[@]}"; do
+            rm -f "$conf" 2>/dev/null || true
+        done
+        log_success "HTTP/3 enabled for ${#changed[@]} SSL vhost(s)"
+        return 0
+    fi
+
+    log_error "Nginx configuration invalid after HTTP/3 updates; rolling back"
+    if [[ -n "$test_output" ]]; then
+        log_error "nginx -t output: $test_output"
+    fi
+    for conf in "${changed[@]}"; do
+        if [[ -f "${conf}.bak.http3" ]]; then
+            mv "${conf}.bak.http3" "$conf" 2>/dev/null || true
+        fi
+    done
     nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
+    return 1
+}
+
+normalize_cdn_url() {
+    local input=$1
+    input=$(echo "$input" | xargs)
+    input="${input%/}"
+    if [[ -z "$input" ]]; then
+        return 1
+    fi
+    if [[ "$input" =~ ^https?:// ]]; then
+        echo "$input"
+    else
+        echo "${CDN_DEFAULT_SCHEME}://$input"
+    fi
+}
+
+cdn_host_from_url() {
+    local url=$1
+    echo "$url" | awk -F/ '{print $3}'
+}
+
+ensure_cdn_mu_plugin() {
+    local wp_path=$1
+    local mu_dir="$wp_path/wp-content/mu-plugins"
+    mkdir -p "$mu_dir"
+    cat > "$mu_dir/dazestack-cdn.php" <<'CDN_PHP'
+<?php
+/**
+ * Plugin Name: DazeStack CDN
+ * Description: Rewrites static asset URLs to a CDN when enabled.
+ */
+if (!defined('ABSPATH')) {
+    exit;
+}
+if (!defined('DAZESTACK_CDN_ENABLED') || !DAZESTACK_CDN_ENABLED) {
+    return;
+}
+if (!defined('DAZESTACK_CDN_URL') || !DAZESTACK_CDN_URL) {
+    return;
+}
+
+function dazestack_cdn_get_base() {
+    static $base = null;
+    if ($base !== null) {
+        return $base;
+    }
+    $base = rtrim(DAZESTACK_CDN_URL, '/');
+    return $base;
+}
+
+function dazestack_cdn_is_local_host($host) {
+    $site = wp_parse_url(site_url());
+    if (!$site || empty($site['host'])) {
+        return false;
+    }
+    $site_host = strtolower($site['host']);
+    $host = strtolower($host);
+    if ($host === $site_host) {
+        return true;
+    }
+    if ($host === 'www.' . $site_host) {
+        return true;
+    }
+    if ('www.' . $host === $site_host) {
+        return true;
+    }
+    return false;
+}
+
+function dazestack_cdn_rewrite_url($url) {
+    if (empty($url) || !is_string($url)) {
+        return $url;
+    }
+    $parts = wp_parse_url($url);
+    if (!$parts || empty($parts['host'])) {
+        return $url;
+    }
+    if (!dazestack_cdn_is_local_host($parts['host'])) {
+        return $url;
+    }
+    $base = dazestack_cdn_get_base();
+    if (empty($base)) {
+        return $url;
+    }
+    $path = isset($parts['path']) ? $parts['path'] : '';
+    $query = isset($parts['query']) ? '?' . $parts['query'] : '';
+    return $base . $path . $query;
+}
+
+add_filter('wp_get_attachment_url', 'dazestack_cdn_rewrite_url', 10, 1);
+add_filter('script_loader_src', 'dazestack_cdn_rewrite_url', 10, 1);
+add_filter('style_loader_src', 'dazestack_cdn_rewrite_url', 10, 1);
+add_filter('content_url', 'dazestack_cdn_rewrite_url', 10, 1);
+add_filter('plugins_url', 'dazestack_cdn_rewrite_url', 10, 1);
+add_filter('template_directory_uri', 'dazestack_cdn_rewrite_url', 10, 1);
+add_filter('stylesheet_directory_uri', 'dazestack_cdn_rewrite_url', 10, 1);
+add_filter('theme_file_uri', 'dazestack_cdn_rewrite_url', 10, 1);
+
+add_filter('wp_get_attachment_image_src', function ($image) {
+    if (!is_array($image) || empty($image[0])) {
+        return $image;
+    }
+    $image[0] = dazestack_cdn_rewrite_url($image[0]);
+    return $image;
+}, 10, 1);
+
+add_filter('wp_calculate_image_srcset', function ($sources) {
+    if (!is_array($sources)) {
+        return $sources;
+    }
+    foreach ($sources as $key => $source) {
+        if (!empty($source['url'])) {
+            $sources[$key]['url'] = dazestack_cdn_rewrite_url($source['url']);
+        }
+    }
+    return $sources;
+}, 10, 1);
+CDN_PHP
+
+    chown -R www-data:www-data "$mu_dir" 2>/dev/null || true
+    chmod 644 "$mu_dir/dazestack-cdn.php" 2>/dev/null || true
+}
+
+update_domain_registry_cdn() {
+    local domain=$1
+    local enabled=$2
+    local url=$3
+    local provider=$4
+
+    registry_lock "domain" || return 1
+    local registry="$REGISTRY_FILE"
+
+    if ! jq -e ".domains[\"$domain\"]" "$registry" >/dev/null 2>&1; then
+        log_error "Domain not found in registry: $domain"
+        return 1
+    fi
+
+    cp "$registry" "${registry}.backup"
+    if ! jq --arg domain "$domain" \
+           --arg enabled "$enabled" \
+           --arg url "$url" \
+           --arg provider "$provider" \
+        '.domains[$domain].cdn_enabled = ($enabled == "true") |
+         .domains[$domain].cdn_url = $url |
+         .domains[$domain].cdn_provider = $provider |
+         .domains[$domain].cdn_updated_at = now |
+         .metadata.last_updated = now' \
+        "$registry" > "${registry}.tmp"; then
+        log_error "Failed to update CDN settings in registry"
+        mv "${registry}.backup" "$registry"
+        return 1
+    fi
+
+    mv "${registry}.tmp" "$registry"
+    rm -f "${registry}.backup"
+    return 0
+}
+
+enable_cdn_for_site() {
+    if [[ "$ENABLE_CDN" != "true" ]]; then
+        log_warn "CDN integration disabled by configuration"
+        return 1
+    fi
+
+    local domain_raw=$1
+    local cdn_input=$2
+    local provider=${3:-"custom"}
+
+    local domain
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    if [[ -z "$cdn_input" ]]; then
+        log_error "CDN URL required"
+        return 1
+    fi
+
+    local cdn_url
+    cdn_url=$(normalize_cdn_url "$cdn_input") || {
+        log_error "Invalid CDN URL"
+        return 1
+    }
+    local cdn_host
+    cdn_host=$(cdn_host_from_url "$cdn_url")
+    if [[ -z "$cdn_host" ]]; then
+        log_error "Invalid CDN URL (missing host)"
+        return 1
+    fi
+    if [[ "$cdn_host" == "$domain" || "$cdn_host" == "www.$domain" ]]; then
+        log_warn "CDN host matches site domain; rewrite may be redundant"
+    fi
+
+    local wp_path="$SITES_DIR/$domain/public"
+    if [[ ! -f "$wp_path/wp-config.php" ]]; then
+        log_error "wp-config.php not found for $domain"
+        return 1
+    fi
+
+    ensure_wp_cli || return 1
+    ensure_cdn_mu_plugin "$wp_path"
+
+    run_wp_cli "$wp_path" config set DAZESTACK_CDN_ENABLED true --raw --type=constant || {
+        log_error "Failed to enable CDN in wp-config.php"
+        return 1
+    }
+    run_wp_cli "$wp_path" config set DAZESTACK_CDN_URL "$cdn_url" --type=constant || {
+        log_error "Failed to set CDN URL in wp-config.php"
+        return 1
+    }
+    run_wp_cli "$wp_path" config set DAZESTACK_CDN_PROVIDER "$provider" --type=constant >/dev/null 2>&1 || true
+
+    update_domain_registry_cdn "$domain" "true" "$cdn_url" "$provider" || true
+    log_success "CDN enabled for $domain ($cdn_url)"
+    return 0
+}
+
+disable_cdn_for_site() {
+    local domain_raw=$1
+    local domain
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    local wp_path="$SITES_DIR/$domain/public"
+    if [[ ! -f "$wp_path/wp-config.php" ]]; then
+        log_error "wp-config.php not found for $domain"
+        return 1
+    fi
+
+    ensure_wp_cli || return 1
+    run_wp_cli "$wp_path" config set DAZESTACK_CDN_ENABLED false --raw --type=constant >/dev/null 2>&1 || true
+    run_wp_cli "$wp_path" config delete DAZESTACK_CDN_URL --type=constant >/dev/null 2>&1 || true
+    run_wp_cli "$wp_path" config delete DAZESTACK_CDN_PROVIDER --type=constant >/dev/null 2>&1 || true
+
+    update_domain_registry_cdn "$domain" "false" "" "" || true
+    log_success "CDN disabled for $domain"
+    return 0
+}
+
+show_cdn_status() {
+    local domain_raw=$1
+    local domain
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    if [[ ! -f "$REGISTRY_FILE" ]]; then
+        log_error "Registry not found"
+        return 1
+    fi
+    if ! jq -e ".domains[\"$domain\"]" "$REGISTRY_FILE" >/dev/null 2>&1; then
+        log_error "Domain not found in registry: $domain"
+        return 1
+    fi
+
+    local enabled
+    local url
+    local provider
+    enabled=$(jq -r ".domains[\"$domain\"].cdn_enabled // false" "$REGISTRY_FILE" 2>/dev/null)
+    url=$(jq -r ".domains[\"$domain\"].cdn_url // \"\"" "$REGISTRY_FILE" 2>/dev/null)
+    provider=$(jq -r ".domains[\"$domain\"].cdn_provider // \"\"" "$REGISTRY_FILE" 2>/dev/null)
+
+    echo "CDN: $enabled"
+    [[ -n "$url" ]] && echo "CDN URL: $url"
+    [[ -n "$provider" ]] && echo "Provider: $provider"
+    return 0
+}
+
+update_vhost_image_optimization() {
+    local domain=$1
+    local conf="/etc/nginx/sites-available/${domain}.conf"
+    if [[ ! -f "$conf" ]]; then
+        log_warn "Nginx vhost not found for $domain"
+        return 1
+    fi
+    if grep -q "/etc/nginx/snippets/wordpress-images.conf" "$conf"; then
+        return 0
+    fi
+
+    local tmp="${conf}.tmp"
+    local insert_line="    # Image optimization (AVIF/WebP when available)\n    include /etc/nginx/snippets/wordpress-images.conf;"
+
+    if grep -q "# Static files caching" "$conf"; then
+        awk -v inc="$insert_line" '
+            !done && $0 ~ /# Static files caching/ { print inc; done=1 }
+            { print }
+        ' "$conf" > "$tmp"
+    else
+        awk -v inc="$insert_line" '
+            !done && $0 ~ /# PHP processing/ { print inc; done=1 }
+            { print }
+        ' "$conf" > "$tmp"
+    fi
+
+    if [[ -s "$tmp" ]]; then
+        mv "$tmp" "$conf"
+        log_info "Added image optimization include for $domain"
+        return 0
+    fi
+    rm -f "$tmp"
+    log_warn "Failed to update vhost for $domain"
+    return 1
+}
+
+upgrade_existing_sites() {
+    require_initialized || return 1
+    check_root
+
+    if [[ ! -f "$REGISTRY_FILE" ]]; then
+        log_warn "Registry not found; skipping upgrade"
+        return 1
+    fi
+
+    write_nginx_image_optimization_map
+    write_nginx_image_optimization_snippet
+
+    local domains
+    domains=$(jq -r '.domains | keys[]' "$REGISTRY_FILE" 2>/dev/null || true)
+    if [[ -z "$domains" ]]; then
+        log_info "No sites registered; nothing to upgrade"
+        return 0
+    fi
+
+    local domain
+    for domain in $domains; do
+        [[ -z "$domain" ]] && continue
+        update_vhost_image_optimization "$domain" || true
+
+        local cdn_enabled
+        local cdn_url
+        local cdn_provider
+        cdn_enabled=$(jq -r ".domains[\"$domain\"].cdn_enabled // false" "$REGISTRY_FILE" 2>/dev/null)
+        cdn_url=$(jq -r ".domains[\"$domain\"].cdn_url // \"\"" "$REGISTRY_FILE" 2>/dev/null)
+        cdn_provider=$(jq -r ".domains[\"$domain\"].cdn_provider // \"custom\"" "$REGISTRY_FILE" 2>/dev/null)
+        if [[ "$cdn_enabled" == "true" && -n "$cdn_url" ]]; then
+            enable_cdn_for_site "$domain" "$cdn_url" "$cdn_provider" || true
+        fi
+    done
+
+    if nginx -t >/dev/null 2>&1; then
+        systemctl reload nginx >/dev/null 2>&1 || true
+        log_success "Existing sites upgraded"
+        return 0
+    fi
+    log_warn "Nginx configuration invalid after upgrade; review vhosts"
+    return 1
 }
 
 enable_ssl_for_site() {
@@ -3508,7 +5412,11 @@ enable_ssl_for_site() {
     log_info "Requesting SSL certificate for $domain..."
     if certbot --nginx "${cert_domains[@]}" \
         --agree-tos --no-eff-email --redirect -m "$email" --non-interactive >/dev/null 2>&1; then
-        maybe_enable_http3_for_site "$domain"
+        if [[ "$ENABLE_HTTP3_FORCE_ALL" == "true" ]]; then
+            enable_http3_for_all_ssl_vhosts || true
+        else
+            maybe_enable_http3_for_site "$domain"
+        fi
         log_success "SSL enabled for $domain"
         return 0
     fi
@@ -3763,12 +5671,18 @@ create_site() {
         run_wp_cli "$wp_path" plugin install nginx-helper --activate || log_warn "Failed to install Nginx Helper"
         run_wp_cli "$wp_path" config set RT_WP_NGINX_HELPER_CACHE_PATH "$CACHE_DIR" || log_warn "Failed to set Nginx Helper cache path"
     fi
+
+    if [[ "$ENABLE_CDN" == "true" ]]; then
+        ensure_cdn_mu_plugin "$wp_path" || log_warn "Failed to install CDN MU plugin"
+    fi
     
     chown -R www-data:www-data "$site_dir"
     chmod 640 "$wp_path/wp-config.php" 2>/dev/null || true
     
     # Create Nginx vhost with secure defaults
     log_info "Creating Nginx configuration..."
+    write_nginx_image_optimization_map
+    write_nginx_image_optimization_snippet
     local server_names="$domain"
     if should_include_www "$domain"; then
         server_names="$domain www.$domain"
@@ -3859,6 +5773,9 @@ server {
         try_files \$uri \$uri/ /index.php?\$args;
     }
 
+    # Image optimization (AVIF/WebP when available)
+    include /etc/nginx/snippets/wordpress-images.conf;
+
     # PHP processing
     location ~ \.php$ {
         try_files \$uri =404;
@@ -3879,7 +5796,7 @@ server {
     }
 
     # Static files caching
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
+    location ~* \.(gif|ico|css|js|svg|woff|woff2|ttf|eot|webp|avif)$ {
         expires 365d;
         add_header Cache-Control "public, immutable";
         access_log off;
@@ -4149,7 +6066,7 @@ list_sites() {
     echo "--------------------------------------------------------------"
     
     jq -r '.domains | to_entries[] | 
-        "Domain: \(.key)\n  Site Title: \(.value.site_title // "n/a")\n  Admin Email: \(.value.admin_email // "n/a")\n  Redis DB: \(.value.redis_db)\n  PHP Pool: \(.value.php_pool)\n  Database: \(.value.db_name)\n  Status: \(.value.status)\n  Created: \(.value.created_at | strflocaltime("%Y-%m-%d %H:%M:%S"))\n"' \
+        "Domain: \(.key)\n  Site Title: \(.value.site_title // "n/a")\n  Admin Email: \(.value.admin_email // "n/a")\n  Redis DB: \(.value.redis_db)\n  PHP Pool: \(.value.php_pool)\n  Database: \(.value.db_name)\n  CDN: \(.value.cdn_enabled // false)\n  CDN URL: \(.value.cdn_url // "n/a")\n  CDN Provider: \(.value.cdn_provider // "n/a")\n  Status: \(.value.status)\n  Created: \(.value.created_at | strflocaltime("%Y-%m-%d %H:%M:%S"))\n"' \
         "$registry" 2>/dev/null || echo "Error reading registry"
     
     echo "--------------------------------------------------------------"
@@ -4230,6 +6147,22 @@ COMMANDS:
   enable-ssl <domain>         Obtain SSL cert and enable HTTP/2/3 when supported
   install-cli                 Install standalone CLI wrapper
   update-cloudflare-ips       Refresh Cloudflare IP allowlist for real IPs
+  cdn-enable <domain> <url> [provider]
+                              Enable CDN rewrite for a site (provider optional)
+  cdn-disable <domain>        Disable CDN rewrite for a site
+  cdn-status <domain>         Show CDN status for a site
+  flush-object-cache          Flush Redis object cache for all sites
+  optimize-images <domain|--all>
+                              Generate AVIF/WebP variants for images
+  upgrade-sites               Apply new feature snippets to existing sites
+  nginx-source-build <version>
+                              Build Nginx from source (pins version, HTTP/3/Zstd/Brotli)
+                              Env: NGINX_QUIC_OPENSSL_VENDOR=official|quictls NGINX_QUIC_OPENSSL_REF=latest-stable|<tag>
+                              Flags: --auto (enable scheduled updates), --no-auto
+  rebuild-nginx               Rebuild Nginx using saved source-build state
+  nginx-auto-update --enable|--disable|--run|--status
+                              Periodically rebuild Nginx from latest stable (cron)
+  enable-http3-all            Patch all SSL vhosts to enable HTTP/3
   remove-old-backups [days]   Remove backups older than N days (default: auto)
   compression-status          Show gzip/brotli/zstd enablement and levels
   factory-reset [--force]     Remove stack, data, and configs (DANGEROUS)
@@ -4263,6 +6196,24 @@ EXAMPLES:
 
   # Auto-tune performance
   sudo bash $0 auto-tune
+
+  # Enable CDN for a site
+  sudo bash $0 cdn-enable example.com https://cdn.example.com keycdn
+
+  # Flush Redis object cache for all sites
+  sudo bash $0 flush-object-cache
+
+  # Generate AVIF/WebP variants for all sites
+  sudo bash $0 optimize-images --all
+
+  # Upgrade existing sites (apply new feature snippets)
+  sudo bash $0 upgrade-sites
+
+  # Build Nginx from source (latest stable)
+  sudo bash $0 nginx-source-build stable
+
+  # Rebuild Nginx using saved source-build state
+  sudo bash $0 rebuild-nginx
 
   # Remove old backups (use default retention)
   sudo bash $0 remove-old-backups
@@ -4306,6 +6257,15 @@ IMPORTANT LOCATIONS:
   - Registry: $REGISTRY_FILE
   - Cloudflare guide: $CONFIG_DIR/cloudflare-recommended.txt
 
+TUNABLES (env):
+  - ENABLE_HTTP3_FORCE_ALL=true|false   # Patch all SSL vhosts after cert issuance
+  - ENABLE_HTTP3_HQ=true|false          # Enable HTTP/3 HQ mode + Alt-Svc
+  - ENABLE_QUIC_TUNING=true|false       # QUIC tuning (quic_retry/quic_gso)
+  - ENABLE_TLS_SESSION_TICKETS=true|false
+  - ENABLE_TLS_EARLY_DATA=true|false    # TLS 1.3 0-RTT (use with care)
+  - ENABLE_VISIBILITY_ENDPOINTS=true|false
+  - VISIBILITY_PORT=8080
+
 SUPPORT:
   - Author: $INSTALLER_AUTHOR
   - Email: $INSTALLER_EMAIL
@@ -4328,8 +6288,17 @@ Full Feature List:
   - Optional Nginx Helper integration + local purge endpoints (/purge/ + PURGE)
   - Redis DB 0 reserved for system use (domains use DB 1-15)
   - Nginx FastCGI microcache (full page caching)
-  - HTTP/2 + optional HTTP/3 (auto-detect when supported)
-  - Optional Brotli + zstd + gzip compression
+  - HTTP/2 + HTTP/3 when compiled (auto-detect when supported)
+  - OpenSSL QUIC source selection (official/quictls) for HTTP/3 builds
+  - Nginx auto-update (latest stable via cron; default on for source builds)
+  - Brotli + zstd + gzip compression when modules are available
+  - Accept-Encoding aware cache keys (zstd > br > gzip)
+  - Optional QUIC tuning + HTTP/3 HQ mode
+  - Optional HTTP/3 auto-patch for all SSL vhosts
+  - Optional CDN integration (per-site enable/disable, provider-agnostic)
+  - Optional image optimization (AVIF/WebP variants + cron)
+  - Optional TCP BBR congestion control (kernel-dependent)
+  - Source-built Nginx pinned by default (version: $NGINX_SOURCE_VERSION; HTTP/3/Brotli/Zstd)
   - Auto-tune engine with cron scheduling
   - Optional auto-SSL via Certbot (--nginx) with HTTP/3 patching
   - Modular phase runner (run any phase independently)
@@ -4341,6 +6310,7 @@ Full Feature List:
   - Automatic log rotation and cleanup
   - Maintenance: remove old backups + compression status reporting
   - Maintenance: factory reset or refresh reinstall (destructive)
+  - Local visibility endpoints (health/status/protocol)
   - UFW + fail2ban protection (preserve existing rules)
   - Conservative sysctl performance tuning
   - Comprehensive health checks and diagnostics
@@ -4573,6 +6543,79 @@ maintenance_cleanup() {
     log_success "System cleanup completed"
 }
 
+load_redis_password() {
+    if [[ -n "$REDIS_PASSWORD" ]]; then
+        return 0
+    fi
+    if [[ -f "$CREDENTIALS_DIR/redis-credentials.txt.enc" ]]; then
+        decrypt_credentials "$CREDENTIALS_DIR/redis-credentials.txt.enc" >/dev/null 2>&1 || true
+        REDIS_PASSWORD=$(grep "^Password:" "$CREDENTIALS_DIR/redis-credentials.txt" | cut -d: -f2- | xargs)
+        shred -u -n 3 "$CREDENTIALS_DIR/redis-credentials.txt" 2>/dev/null || true
+    fi
+    [[ -n "$REDIS_PASSWORD" ]]
+}
+
+flush_redis_object_cache_all_sites() {
+    if ! load_redis_password; then
+        log_warn "Redis credentials not available; skipping Redis flush"
+        return 1
+    fi
+    if [[ ! -f "$REGISTRY_FILE" ]]; then
+        log_warn "Registry not found; skipping Redis flush"
+        return 1
+    fi
+    local redis_dbs
+    redis_dbs=$(jq -r '.domains | to_entries[] | .value.redis_db // empty' "$REGISTRY_FILE" 2>/dev/null | sort -u || true)
+    if [[ -z "$redis_dbs" ]]; then
+        log_info "No Redis databases allocated"
+        return 0
+    fi
+    local db
+    for db in $redis_dbs; do
+        redis-cli -a "$REDIS_PASSWORD" -n "$db" FLUSHDB >/dev/null 2>&1 || true
+    done
+    log_success "Redis object caches flushed for all WordPress sites"
+    return 0
+}
+
+optimize_images_for_site() {
+    if [[ "$ENABLE_IMAGE_OPTIMIZATION" != "true" ]]; then
+        log_warn "Image optimization disabled by configuration"
+        return 1
+    fi
+
+    local domain_raw=$1
+    local domain
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    if ! command -v cwebp >/dev/null 2>&1 && ! command -v avifenc >/dev/null 2>&1; then
+        log_warn "Image optimization tools not installed (libwebp-tools/libavif-bin)"
+        return 1
+    fi
+
+    [[ -x "$IMAGE_OPTIMIZER_SCRIPT" ]] || write_image_optimizer_script
+    "$IMAGE_OPTIMIZER_SCRIPT" "$domain" || log_warn "Image optimization failed for $domain"
+    log_success "Image optimization completed for $domain"
+    return 0
+}
+
+optimize_images_all_sites() {
+    if [[ "$ENABLE_IMAGE_OPTIMIZATION" != "true" ]]; then
+        log_warn "Image optimization disabled by configuration"
+        return 1
+    fi
+
+    if ! command -v cwebp >/dev/null 2>&1 && ! command -v avifenc >/dev/null 2>&1; then
+        log_warn "Image optimization tools not installed (libwebp-tools/libavif-bin)"
+        return 1
+    fi
+
+    [[ -x "$IMAGE_OPTIMIZER_SCRIPT" ]] || write_image_optimizer_script
+    "$IMAGE_OPTIMIZER_SCRIPT" --all || log_warn "Image optimization failed for one or more sites"
+    log_success "Image optimization completed for all sites"
+    return 0
+}
+
 clear_caches_and_temp() {
     log_section "Maintenance: Clear Caches & Temp Files"
     set_log_context "MAINT" "Clear-Caches"
@@ -4603,21 +6646,7 @@ clear_caches_and_temp() {
     local do_redis
     do_redis=$(prompt_yes_no "Flush Redis cache for WordPress sites-" "n")
     if [[ "$do_redis" == "true" ]]; then
-        if [[ -z "$REDIS_PASSWORD" ]] && [[ -f "$CREDENTIALS_DIR/redis-credentials.txt.enc" ]]; then
-            decrypt_credentials "$CREDENTIALS_DIR/redis-credentials.txt.enc" >/dev/null 2>&1 || true
-            REDIS_PASSWORD=$(grep "^Password:" "$CREDENTIALS_DIR/redis-credentials.txt" | cut -d: -f2- | xargs)
-            shred -u -n 3 "$CREDENTIALS_DIR/redis-credentials.txt" 2>/dev/null || true
-        fi
-        if [[ -n "$REDIS_PASSWORD" && -f "$REGISTRY_FILE" ]]; then
-            local redis_dbs
-            redis_dbs=$(jq -r '.domains | to_entries[] | .value.redis_db // empty' "$REGISTRY_FILE" 2>/dev/null | sort -u || true)
-            for db in $redis_dbs; do
-                redis-cli -a "$REDIS_PASSWORD" -n "$db" FLUSHDB >/dev/null 2>&1 || true
-            done
-            log_success "Redis caches flushed for WordPress sites"
-        else
-            log_warn "Redis credentials not available; skipping Redis flush"
-        fi
+        flush_redis_object_cache_all_sites || true
     fi
 
     log_success "Cache and temp cleanup completed"
@@ -4861,7 +6890,12 @@ remove_all_web_roots() {
 remove_apt_sources() {
     rm -f /etc/apt/sources.list.d/ondrej-php*.list 2>/dev/null || true
     rm -f /etc/apt/sources.list.d/ondrej-php*.sources 2>/dev/null || true
+    rm -f /etc/apt/sources.list.d/ondrej-nginx*.list 2>/dev/null || true
+    rm -f /etc/apt/sources.list.d/ondrej-nginx*.sources 2>/dev/null || true
+    rm -f /etc/apt/sources.list.d/ondrej-ubuntu-nginx*.list 2>/dev/null || true
+    rm -f /etc/apt/sources.list.d/ondrej-ubuntu-nginx*.sources 2>/dev/null || true
     rm -f "$ONDREJ_PHP_PREF_FILE" 2>/dev/null || true
+    rm -f "$ONDREJ_NGINX_PREF_FILE" 2>/dev/null || true
 }
 
 reset_stack_files() {
@@ -4872,20 +6906,24 @@ reset_stack_files() {
     rm -f /etc/nginx/snippets/wordpress-security.conf 2>/dev/null || true
     rm -f /etc/nginx/snippets/wordpress-performance.conf 2>/dev/null || true
     rm -f /etc/nginx/snippets/wordpress-http3.conf 2>/dev/null || true
+    rm -f /etc/nginx/snippets/wordpress-images.conf 2>/dev/null || true
     rm -f /etc/nginx/conf.d/00-rate-limits.conf 2>/dev/null || true
+    rm -f /etc/nginx/conf.d/05-image-optimization.conf 2>/dev/null || true
     rm -f /etc/nginx/conf.d/10-cache-zones.conf 2>/dev/null || true
     rm -f "$CLOUDFLARE_CONF" 2>/dev/null || true
     rm -f "$LOGROTATE_CONFIG" 2>/dev/null || true
     rm -f /etc/sysctl.d/99-wp-performance.conf 2>/dev/null || true
     rm -f /etc/fail2ban/jail.local 2>/dev/null || true
-    rm -f "$CRON_WORDPRESS_FILE" "$CRON_BACKUP_FILE" "$AUTO_TUNE_CRON_FILE" "$CLOUDFLARE_CRON" 2>/dev/null || true
-    rm -f "$CRON_RUNNER_SCRIPT" "$CRON_BACKUP_SCRIPT" "$AUTO_TUNE_SCRIPT" /usr/local/bin/update-cloudflare-ips.sh 2>/dev/null || true
+    rm -f "$CRON_WORDPRESS_FILE" "$CRON_BACKUP_FILE" "$AUTO_TUNE_CRON_FILE" "$CLOUDFLARE_CRON" "$IMAGE_OPTIMIZER_CRON_FILE" "$NGINX_AUTO_UPDATE_CRON" 2>/dev/null || true
+    rm -f "$CRON_RUNNER_SCRIPT" "$CRON_BACKUP_SCRIPT" "$AUTO_TUNE_SCRIPT" "$IMAGE_OPTIMIZER_SCRIPT" "$NGINX_AUTO_UPDATE_SCRIPT" /usr/local/bin/update-cloudflare-ips.sh 2>/dev/null || true
+    rm -f "$NGINX_BUILD_STATE_FILE" 2>/dev/null || true
     rm -f "$CLI_WRAPPER" 2>/dev/null || true
     rm -f "$WP_CLI_BIN" 2>/dev/null || true
     rm -rf "$WP_CLI_CACHE_DIR" 2>/dev/null || true
     remove_apt_sources
 
     rm -rf "$INSTALL_DIR" "$STATE_DIR" "$LOG_DIR" "$BACKUP_DIR" "$CACHE_DIR" "$CONFIG_DIR" "$CREDENTIALS_DIR" 2>/dev/null || true
+    rm -rf "$NGINX_SOURCE_BUILD_ROOT" 2>/dev/null || true
     rm -rf /var/lib/mysql /var/lib/redis 2>/dev/null || true
 }
 
@@ -5001,6 +7039,11 @@ show_menu() {
     echo -e "${YELLOW}14${NC}) Compression status"
     echo -e "${YELLOW}15${NC}) Factory reset (remove stack)"
     echo -e "${YELLOW}16${NC}) Refresh installation (reinstall stack)"
+    echo -e "${YELLOW}17${NC}) Configure CDN for site"
+    echo -e "${YELLOW}18${NC}) Flush Redis object cache (all sites)"
+    echo -e "${YELLOW}19${NC}) Optimize images (AVIF/WebP)"
+    echo -e "${YELLOW}20${NC}) Upgrade existing sites (apply new features)"
+    echo -e "${YELLOW}21${NC}) Nginx source build menu (advanced)"
     echo -e "${YELLOW}0${NC}) Exit"
     echo ""
 }
@@ -5099,6 +7142,241 @@ menu_update_cloudflare_ips() {
     configure_cloudflare_realip
 }
 
+menu_cdn_config() {
+    require_initialized || return 1
+    check_root
+    if [[ "$ENABLE_CDN" != "true" ]]; then
+        log_warn "CDN integration disabled by configuration"
+        return 1
+    fi
+    local domain
+    domain=$(prompt_input "Domain") || {
+        log_warn "Domain is required"
+        return 1
+    }
+    local enable_cdn
+    enable_cdn=$(prompt_yes_no "Enable CDN for this site-" "y")
+    if [[ "$enable_cdn" == "true" ]]; then
+        local provider
+        local cdn_url
+        provider=$(prompt_input "CDN provider (keycdn/bunnycdn/cloudflare/custom)" "custom")
+        cdn_url=$(prompt_input "CDN URL (e.g., https://cdn.example.com)") || {
+            log_warn "CDN URL is required"
+            return 1
+        }
+        enable_cdn_for_site "$domain" "$cdn_url" "$provider"
+    else
+        disable_cdn_for_site "$domain"
+    fi
+}
+
+menu_flush_object_cache() {
+    require_initialized || return 1
+    check_root
+    flush_redis_object_cache_all_sites || true
+}
+
+menu_optimize_images() {
+    require_initialized || return 1
+    check_root
+    local all_sites
+    all_sites=$(prompt_yes_no "Optimize images for ALL sites-" "n")
+    if [[ "$all_sites" == "true" ]]; then
+        optimize_images_all_sites || true
+    else
+        local domain
+        domain=$(prompt_input "Domain") || {
+            log_warn "Domain is required"
+            return 1
+        }
+        optimize_images_for_site "$domain" || true
+    fi
+}
+
+menu_upgrade_existing_sites() {
+    upgrade_existing_sites || true
+}
+
+menu_nginx_source_build() {
+    check_root
+    local version
+    if [[ -f "$NGINX_BUILD_STATE_FILE" ]]; then
+        load_nginx_build_state || true
+    fi
+    local default_version="${NGINX_BUILD_VERSION:-}"
+    if [[ -z "$default_version" ]]; then
+        default_version=$(get_latest_nginx_stable_version 2>/dev/null || echo "1.28.1")
+    fi
+    version=$(prompt_input "Nginx version to build (pin)" "$default_version") || {
+        log_warn "Nginx version is required"
+        return 1
+    }
+    version=$(resolve_nginx_source_version "$version")
+
+    local enable_http3
+    local enable_brotli
+    local enable_zstd
+    local quic_vendor
+    local quic_ref
+    local enable_auto
+    enable_http3=$(prompt_yes_no "Enable HTTP/3 (QUIC)?" "y")
+    enable_brotli=$(prompt_yes_no "Enable Brotli module?" "y")
+    enable_zstd=$(prompt_yes_no "Enable Zstd module?" "y")
+    enable_auto=$(prompt_yes_no "Enable automatic Nginx stable updates (cron)?" "y")
+
+    if [[ "$enable_http3" == "true" ]]; then
+        local vendor_default="${NGINX_QUIC_OPENSSL_VENDOR:-official}"
+        quic_vendor=$(prompt_input "OpenSSL QUIC source (official/quictls)" "$vendor_default") || {
+            log_warn "OpenSSL vendor is required"
+            return 1
+        }
+        quic_vendor=$(normalize_openssl_vendor "$quic_vendor")
+        if [[ -z "$quic_vendor" ]]; then
+            log_warn "Unknown OpenSSL vendor; using official"
+            quic_vendor="official"
+        fi
+        NGINX_QUIC_OPENSSL_VENDOR="$quic_vendor"
+        NGINX_QUIC_OPENSSL_REPO=""
+        NGINX_QUIC_OPENSSL_REF=""
+        resolve_quic_openssl_source
+        quic_ref=$(prompt_input "OpenSSL ref (tag/branch)" "$NGINX_QUIC_OPENSSL_REF")
+        NGINX_QUIC_OPENSSL_REF="$quic_ref"
+        resolve_quic_openssl_source
+    fi
+
+    ENABLE_NGINX_SOURCE_BUILD="true"
+    NGINX_SOURCE_VERSION="$version"
+    ENABLE_HTTP3="$enable_http3"
+    ENABLE_BROTLI="$enable_brotli"
+    ENABLE_ZSTD="$enable_zstd"
+    if build_nginx_from_source "$version"; then
+        detect_http3_support
+        detect_brotli_support
+        detect_zstd_support
+        write_nginx_build_state "source" "$version" \
+            "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+            "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+            "success" "source build (menu)"
+        systemctl enable nginx >/dev/null 2>&1 || true
+        systemctl restart nginx >/dev/null 2>&1 || true
+        if [[ "$enable_auto" == "true" ]]; then
+            enable_nginx_auto_update || true
+        else
+            disable_nginx_auto_update || true
+        fi
+        log_success "Nginx source build installed"
+    else
+        log_warn "Source build failed; falling back to package install"
+        ensure_ondrej_nginx_mainline || true
+        safe_apt_install nginx || return 1
+        install_nginx_optional_modules
+        install_image_optimization_tools
+        detect_http3_support
+        detect_brotli_support
+        detect_zstd_support
+        write_nginx_build_state "package" "$(nginx -v 2>&1 | awk -F/ '{print $2}' | tr -d '\r')" \
+            "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+            "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+            "fallback" "source build failed"
+        systemctl restart nginx >/dev/null 2>&1 || true
+    fi
+}
+
+menu_nginx_auto_update() {
+    local schedule
+    schedule=$(get_nginx_auto_update_schedule 2>/dev/null || echo "$NGINX_AUTO_UPDATE_SCHEDULE")
+    if [[ -f "$NGINX_AUTO_UPDATE_CRON" ]]; then
+        echo "Nginx auto-update: enabled"
+    else
+        echo "Nginx auto-update: disabled"
+    fi
+    echo "Schedule: $schedule"
+    echo ""
+    local action
+    action=$(prompt_input "Action (enable/disable/leave)" "leave" true)
+    case "${action:-leave}" in
+        enable) enable_nginx_auto_update ;;
+        disable) disable_nginx_auto_update ;;
+        leave|"") return 0 ;;
+        *) log_warn "Unknown action: $action" ;;
+    esac
+}
+
+menu_rebuild_nginx() {
+    check_root
+    load_nginx_build_state || {
+        log_warn "Nginx build state not found"
+        return 1
+    }
+    if [[ "${NGINX_BUILD_TYPE}" != "source" ]]; then
+        log_warn "Source build not enabled; use 'Build Nginx from source' first"
+        return 1
+    fi
+    if [[ -z "${NGINX_BUILD_VERSION}" ]]; then
+        log_warn "No pinned version found in build state"
+        return 1
+    fi
+    ENABLE_NGINX_SOURCE_BUILD="true"
+    NGINX_SOURCE_VERSION="$NGINX_BUILD_VERSION"
+    ENABLE_HTTP3="$NGINX_BUILD_HTTP3_REQUIRED"
+    ENABLE_BROTLI="$NGINX_BUILD_BROTLI_REQUIRED"
+    ENABLE_ZSTD="$NGINX_BUILD_ZSTD_REQUIRED"
+    if build_nginx_from_source "$NGINX_SOURCE_VERSION"; then
+        detect_http3_support
+        detect_brotli_support
+        detect_zstd_support
+        write_nginx_build_state "source" "$NGINX_SOURCE_VERSION" \
+            "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+            "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+            "success" "rebuild"
+        systemctl restart nginx >/dev/null 2>&1 || true
+        log_success "Nginx rebuilt from source"
+    else
+        log_warn "Nginx source rebuild failed; leaving existing version"
+        write_nginx_build_state "source" "$NGINX_SOURCE_VERSION" \
+            "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+            "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+            "failed" "rebuild failed"
+        return 1
+    fi
+}
+
+show_nginx_build_state() {
+    init_nginx_build_state
+    if command -v jq >/dev/null 2>&1; then
+        jq '.' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || cat "$NGINX_BUILD_STATE_FILE"
+    else
+        cat "$NGINX_BUILD_STATE_FILE"
+    fi
+}
+
+menu_nginx_source_build_submenu() {
+    check_root
+    local choice=""
+    while true; do
+        echo -e "${CYAN}---------------- Nginx Source Build Menu ----------------${NC}"
+        echo -e "${YELLOW}1${NC}) Build Nginx from source (custom prompts)"
+        echo -e "${YELLOW}2${NC}) Rebuild source-built Nginx"
+        echo -e "${YELLOW}3${NC}) Show Nginx build state"
+        echo -e "${YELLOW}4${NC}) Enable HTTP/3 for all SSL vhosts"
+        echo -e "${YELLOW}5${NC}) Nginx auto-update (enable/disable)"
+        echo -e "${YELLOW}0${NC}) Back"
+        echo ""
+        read -r -p "Select an option: " choice
+        case "$choice" in
+            1) menu_nginx_source_build || true ;;
+            2) menu_rebuild_nginx || true ;;
+            3) show_nginx_build_state || true ;;
+            4) enable_http3_for_all_ssl_vhosts || true ;;
+            5) menu_nginx_auto_update || true ;;
+            0|q|Q|exit) break ;;
+            *) log_warn "Invalid selection" ;;
+        esac
+        echo ""
+        read -r -p "Press Enter to return to menu..." _
+    done
+}
+
 menu_factory_reset() {
     check_root
     factory_reset
@@ -5131,6 +7409,11 @@ menu_loop() {
             14) check_root && show_compression_status || true ;;
             15) menu_factory_reset || true ;;
             16) menu_refresh_installation || true ;;
+            17) menu_cdn_config || true ;;
+            18) menu_flush_object_cache || true ;;
+            19) menu_optimize_images || true ;;
+            20) menu_upgrade_existing_sites || true ;;
+            21) menu_nginx_source_build_submenu || true ;;
             0|q|Q|exit) break ;;
             *) log_warn "Invalid selection" ;;
         esac
@@ -5304,6 +7587,181 @@ main() {
             configure_cloudflare_realip
             ;;
 
+        cdn-enable)
+            [[ ! -f "$INITIALIZED_FLAG" ]] && {
+                log_error "System not initialized"
+                exit 1
+            }
+            check_root
+            enable_cdn_for_site "${2:-}" "${3:-}" "${4:-custom}"
+            ;;
+
+        cdn-disable)
+            [[ ! -f "$INITIALIZED_FLAG" ]] && {
+                log_error "System not initialized"
+                exit 1
+            }
+            check_root
+            disable_cdn_for_site "${2:-}"
+            ;;
+
+        cdn-status)
+            [[ ! -f "$INITIALIZED_FLAG" ]] && {
+                log_error "System not initialized"
+                exit 1
+            }
+            show_cdn_status "${2:-}"
+            ;;
+
+        flush-object-cache)
+            [[ ! -f "$INITIALIZED_FLAG" ]] && {
+                log_error "System not initialized"
+                exit 1
+            }
+            check_root
+            flush_redis_object_cache_all_sites
+            ;;
+
+        optimize-images)
+            [[ ! -f "$INITIALIZED_FLAG" ]] && {
+                log_error "System not initialized"
+                exit 1
+            }
+            check_root
+            if [[ "${2:-}" == "--all" ]]; then
+                optimize_images_all_sites
+            else
+                optimize_images_for_site "${2:-}"
+            fi
+            ;;
+
+        upgrade-sites)
+            [[ ! -f "$INITIALIZED_FLAG" ]] && {
+                log_error "System not initialized"
+                exit 1
+            }
+            upgrade_existing_sites
+            ;;
+
+        nginx-source-build)
+            check_root
+            shift
+            local auto_update="false"
+            local version=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --auto)
+                        auto_update="true"
+                        shift
+                        ;;
+                    --no-auto)
+                        auto_update="false"
+                        shift
+                        ;;
+                    --help|-h)
+                        show_help
+                        exit 0
+                        ;;
+                    *)
+                        [[ -z "$version" ]] && version="$1"
+                        shift
+                        ;;
+                esac
+            done
+            if [[ -z "$version" ]]; then
+                log_error "Nginx version required (e.g., 1.28.1 or 'stable')"
+                exit 1
+            fi
+            version=$(resolve_nginx_source_version "$version")
+            ENABLE_NGINX_SOURCE_BUILD="true"
+            NGINX_SOURCE_VERSION="$version"
+            if build_nginx_from_source "$version"; then
+                detect_http3_support
+                detect_brotli_support
+                detect_zstd_support
+                write_nginx_build_state "source" "$version" \
+                    "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+                    "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+                    "success" "source build (cli)"
+                systemctl enable nginx >/dev/null 2>&1 || true
+                systemctl restart nginx >/dev/null 2>&1 || true
+                if [[ "$auto_update" == "true" ]]; then
+                    enable_nginx_auto_update || true
+                fi
+            else
+                log_warn "Source build failed; falling back to package install"
+                ensure_ondrej_nginx_mainline || true
+                safe_apt_install nginx || exit 1
+                install_nginx_optional_modules
+                install_image_optimization_tools
+                detect_http3_support
+                detect_brotli_support
+                detect_zstd_support
+                write_nginx_build_state "package" "$(nginx -v 2>&1 | awk -F/ '{print $2}' | tr -d '\r')" \
+                    "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+                    "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+                    "fallback" "source build failed"
+                systemctl restart nginx >/dev/null 2>&1 || true
+            fi
+            ;;
+        
+        nginx-auto-update)
+            check_root
+            local action="${2:-}"
+            case "$action" in
+                --enable) enable_nginx_auto_update ;;
+                --disable) disable_nginx_auto_update ;;
+                --status) nginx_auto_update_status ;;
+                --run) run_nginx_auto_update ;;
+                *) 
+                    log_error "Usage: nginx-auto-update --enable|--disable|--run|--status"
+                    exit 1
+                    ;;
+            esac
+            ;;
+
+        enable-http3-all)
+            check_root
+            enable_http3_for_all_ssl_vhosts
+            ;;
+
+        rebuild-nginx)
+            check_root
+            load_nginx_build_state || {
+                log_error "Nginx build state not found"
+                exit 1
+            }
+            if [[ "${NGINX_BUILD_TYPE}" != "source" ]]; then
+                log_error "Source build not enabled; run nginx-source-build first"
+                exit 1
+            fi
+            if [[ -z "${NGINX_BUILD_VERSION}" ]]; then
+                log_error "Pinned Nginx version not found in state"
+                exit 1
+            fi
+            ENABLE_NGINX_SOURCE_BUILD="true"
+            NGINX_SOURCE_VERSION="$NGINX_BUILD_VERSION"
+            ENABLE_HTTP3="$NGINX_BUILD_HTTP3_REQUIRED"
+            ENABLE_BROTLI="$NGINX_BUILD_BROTLI_REQUIRED"
+            ENABLE_ZSTD="$NGINX_BUILD_ZSTD_REQUIRED"
+            if build_nginx_from_source "$NGINX_SOURCE_VERSION"; then
+                detect_http3_support
+                detect_brotli_support
+                detect_zstd_support
+                write_nginx_build_state "source" "$NGINX_SOURCE_VERSION" \
+                    "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+                    "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+                    "success" "rebuild"
+                systemctl restart nginx >/dev/null 2>&1 || true
+            else
+                write_nginx_build_state "source" "$NGINX_SOURCE_VERSION" \
+                    "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+                    "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+                    "failed" "rebuild failed"
+                exit 1
+            fi
+            ;;
+
         remove-old-backups|purge-old-backups)
             check_root
             remove_old_backups "${2:-}"
@@ -5355,3 +7813,7 @@ trap 'on_error $LINENO "$BASH_COMMAND" $?' ERR
 
 # Run main function with all arguments
 main "$@"
+
+
+
+
