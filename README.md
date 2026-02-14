@@ -526,6 +526,7 @@ flowchart LR
 - Current Audit: `dazestack-wp-audit.md`
 - Changelog: `CHANGELOG.md`
 - License: `LICENSE`
+- AGPLv3 Full Text: `LICENSES/AGPL-3.0.txt`
 - Commercial Terms: `COMMERCIAL_LICENSE.md`
 - Trademark Usage: `TRADEMARK.md`
 
@@ -605,6 +606,8 @@ The installer is modular by design and split into core sections plus executable 
 ├── CONTRIBUTING.md
 ├── CHANGELOG.md
 ├── LICENSE
+├── LICENSES/
+│   └── AGPL-3.0.txt
 ├── COMMERCIAL_LICENSE.md
 └── TRADEMARK.md
 ```
@@ -614,6 +617,7 @@ The installer is modular by design and split into core sections plus executable 
 DazeStack WP uses a dual-license open-core model:
 
 - Open Source: AGPLv3 (`LICENSE`)
+- Canonical AGPL text: `LICENSES/AGPL-3.0.txt`
 - Commercial License: available for proprietary/closed distribution and hosted-commercial terms (`COMMERCIAL_LICENSE.md`)
 
 ## Trademark
