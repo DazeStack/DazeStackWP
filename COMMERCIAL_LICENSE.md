@@ -1,20 +1,38 @@
-# DazeStack Commercial License
+# Commercial License (DazeStack WP)
 
-DazeStack is available under a dual-license model:
+This document outlines the commercial licensing path for DazeStack WP.
 
-1. **AGPLv3 Open Source License** (default for the community)
-2. **Commercial License** (for proprietary, enterprise, or closed deployments)
+## Purpose
 
-## When You Need a Commercial License
+A commercial license is intended for organizations that need to:
 
-You must obtain a commercial license if you want to:
+- distribute DazeStack WP in closed-source/proprietary products,
+- offer managed or hosted services without AGPLv3 reciprocity obligations,
+- integrate DazeStack WP into internal enterprise platforms under non-AGPL terms.
 
-- Deploy DazeStack internally without AGPL obligations
-- Offer a hosted SaaS service based on DazeStack without releasing modifications
-- Embed DazeStack into proprietary software
+## Scope
 
-## Contact
+Commercial rights are granted only through a signed written agreement with the project owner.
+No commercial rights are granted by default through this repository.
 
-Commercial licensing is available from:
+## Request Process
 
-📩 hello@dazestack.com
+To request a commercial license, contact:
+
+- Email: hello@dazestack.com
+- Website: https://dazestack.com
+
+Please include:
+
+- legal entity name,
+- intended distribution/use model,
+- expected deployment scale,
+- support/SLA requirements (if any).
+
+## Default License Reminder
+
+If no separate signed commercial agreement exists, usage is governed by the AGPLv3 path described in `LICENSE`.
+
+## Warranty and Liability
+
+Commercial warranty, indemnity, liability caps, and support commitments are only those explicitly stated in the final signed commercial agreement.
