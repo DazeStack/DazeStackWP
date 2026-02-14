@@ -1,67 +1,49 @@
 # Security Policy
 
-DazeStackWP aims to be safe by default, but **security is a process**.  
-If you find a security issue, please report it privately so we can fix it before public disclosure.
-
 ## Supported Versions
 
-We currently support:
-- **main** branch (latest)
-- Latest tagged release (once releases exist)
-
-Older tags/releases may not receive fixes unless they are widely used.
+| Version line | Status |
+| --- | --- |
+| 0.0.x | Supported |
+| pre-0.0.1 snapshots | Unsupported |
 
 ## Reporting a Vulnerability
 
-**Please DO NOT open a public GitHub issue for security vulnerabilities.**
+Report security issues privately to:
 
-Instead, report privately:
-- Email: **security@dazestack.com** (recommended)
-- Backup: **legal@dazestack.com**
-- Subject: `SECURITY: <short summary>`
-- Include:
-  - Steps to reproduce
-  - Impact assessment (what an attacker can do)
-  - Affected versions / environments
-  - Proof-of-concept (PoC) if available
-  - Any suggested fix/patch
+- Email: `hello@dazestack.com`
+- Fallback: `mail@ashishdungdung.com`
 
-If you prefer encrypted email, include your PGP key in this repo later (e.g., `SECURITY_PGP.asc`).
+Please do not open public issues for vulnerabilities before a fix is available.
 
-## Our Disclosure Process
+## What to Include
 
-We follow a coordinated disclosure approach:
-1. **Acknowledgement** within **3 business days**
-2. **Initial triage** within **7 days**
-3. **Fix / mitigation** as soon as practical (severity-based)
-4. **Release notes** and credit (if desired) after a patch is available
+- Affected command/function/path
+- Reproduction steps
+- Impact assessment
+- Suggested mitigation (if available)
+- Whether the issue is configuration-specific or default-path
 
-## Scope
+## Response Targets
 
-In scope:
-- Installer scripts (Bash)
-- Default configurations shipped by DazeStackWP (Nginx/PHP/DB/Redis/SSL automation)
-- Privilege boundaries, credential storage, backup scripts, and health checks
+- Initial acknowledgement: within 72 hours
+- Triage/update: within 7 days
+- Fix timeline: based on severity and reproducibility
 
-Out of scope (generally):
-- Issues in third-party software that DazeStackWP installs (Nginx/PHP/WordPress) **unless** caused by our configuration
-- Misconfiguration by operators (e.g., exposing admin endpoints, weak passwords) unless the defaults encourage it
+## Security Baseline in This Project
 
-## Safe Harbor
+The installer includes:
 
-We support good-faith security research. If you:
-- Avoid data destruction and service disruption
-- Avoid accessing private data beyond what is necessary to prove the issue
-- Give us a reasonable time to patch before disclosure
+- Input validation for user-facing values (domain/email/user)
+- Encrypted credentials (`AES-256-CBC` + `PBKDF2`)
+- Encrypted scheduled database backups
+- Atomic registry locking for state updates
+- Nginx hardening and rate-limit defaults
+- UFW + fail2ban baseline controls
+- Cloudflare real-IP integration support
 
-…we will not pursue legal action against you for your research.
+## Scope Notes
 
-## Security Tips for Operators (Quick)
-
-- Keep Ubuntu packages updated (`unattended-upgrades` recommended)
-- Use SSH keys, disable password auth
-- Restrict inbound ports with a firewall
-- Keep WordPress plugins/themes updated
-- Test backups and restores regularly
-
-Last updated: 2026-02-03
+- The script performs privileged system operations and must be run with trusted inputs.
+- Operational security still depends on host hardening, patching cadence, and access controls.
+- Review `dazestack-wp-audit.md` for latest audit status and open risks.

@@ -95,6 +95,7 @@ ENABLE_BROTLI=${ENABLE_BROTLI:-true}
 ENABLE_ZSTD=${ENABLE_ZSTD:-true}
 ENABLE_HTTP3_HQ=${ENABLE_HTTP3_HQ:-false}
 ENABLE_HTTP3_FORCE_ALL=${ENABLE_HTTP3_FORCE_ALL:-false}
+ENABLE_HTTP2_FORCE_ALL=${ENABLE_HTTP2_FORCE_ALL:-true}
 ENABLE_QUIC_TUNING=${ENABLE_QUIC_TUNING:-true}
 ENABLE_TLS_SESSION_TICKETS=${ENABLE_TLS_SESSION_TICKETS:-true}
 ENABLE_TLS_EARLY_DATA=${ENABLE_TLS_EARLY_DATA:-false}
@@ -107,18 +108,33 @@ ENABLE_AUTO_SSL=${ENABLE_AUTO_SSL:-false}
 ENABLE_CLOUDFLARE=${ENABLE_CLOUDFLARE:-true}
 REQUIRE_OPCACHE=${REQUIRE_OPCACHE:-false}
 ENABLE_NGINX_HELPER=${ENABLE_NGINX_HELPER:-true}
+FASTCGI_CACHE_TTL=${FASTCGI_CACHE_TTL:-"60s"}
+FASTCGI_CACHE_TTL_404=${FASTCGI_CACHE_TTL_404:-"10m"}
+FASTCGI_CACHE_INACTIVE=${FASTCGI_CACHE_INACTIVE:-"60m"}
+FASTCGI_SKIP_QUERY_STRING=${FASTCGI_SKIP_QUERY_STRING:-true}
+FASTCGI_CACHE_BYPASS_AUTHORIZATION=${FASTCGI_CACHE_BYPASS_AUTHORIZATION:-true}
+FASTCGI_CACHE_BACKGROUND_UPDATE=${FASTCGI_CACHE_BACKGROUND_UPDATE:-true}
+FASTCGI_CACHE_REVALIDATE=${FASTCGI_CACHE_REVALIDATE:-true}
+GZIP_COMP_LEVEL=${GZIP_COMP_LEVEL:-"5"}
+BROTLI_COMP_LEVEL=${BROTLI_COMP_LEVEL:-"5"}
+ZSTD_COMP_LEVEL=${ZSTD_COMP_LEVEL:-"3"}
 ENABLE_CDN=${ENABLE_CDN:-true}
 CDN_DEFAULT_SCHEME=${CDN_DEFAULT_SCHEME:-"https"}
 ENABLE_IMAGE_OPTIMIZATION=${ENABLE_IMAGE_OPTIMIZATION:-true}
 IMAGE_OPTIMIZER_CRON=${IMAGE_OPTIMIZER_CRON:-"35 3 * * *"}
 ENABLE_BBR=${ENABLE_BBR:-true}
 ENABLE_NGINX_SOURCE_BUILD=${ENABLE_NGINX_SOURCE_BUILD:-true}
-NGINX_SOURCE_VERSION=${NGINX_SOURCE_VERSION:-"1.28.1"}
+NGINX_SOURCE_VERSION=${NGINX_SOURCE_VERSION:-"latest-stable"}
 NGINX_SOURCE_BUILD_ROOT=${NGINX_SOURCE_BUILD_ROOT:-"/usr/local/src/dazestack-wp"}
 NGINX_BROTLI_REPO=${NGINX_BROTLI_REPO:-"https://github.com/google/ngx_brotli.git"}
 NGINX_BROTLI_REF=${NGINX_BROTLI_REF:-"master"}
 NGINX_ZSTD_REPO=${NGINX_ZSTD_REPO:-"https://github.com/tokers/zstd-nginx-module.git"}
 NGINX_ZSTD_REF=${NGINX_ZSTD_REF:-"master"}
+ENABLE_CACHE_PURGE_MODULE=${ENABLE_CACHE_PURGE_MODULE:-true}
+REQUIRE_CACHE_PURGE_MODULE=${REQUIRE_CACHE_PURGE_MODULE:-$ENABLE_CACHE_PURGE_MODULE}
+NGINX_CACHE_PURGE_REPO=${NGINX_CACHE_PURGE_REPO:-"https://github.com/FRiCKLE/ngx_cache_purge.git"}
+NGINX_CACHE_PURGE_REF=${NGINX_CACHE_PURGE_REF:-"master"}
+NGINX_CACHE_PURGE_REPO_FALLBACK=${NGINX_CACHE_PURGE_REPO_FALLBACK:-"https://github.com/nginx-modules/ngx_cache_purge.git"}
 ZSTD_BUILD_PIC=${ZSTD_BUILD_PIC:-true}
 ZSTD_SOURCE_REPO=${ZSTD_SOURCE_REPO:-"https://github.com/facebook/zstd.git"}
 ZSTD_SOURCE_REF=${ZSTD_SOURCE_REF:-"latest-stable"}
@@ -196,6 +212,7 @@ ZSTD_AVAILABLE=false
 CACHE_PURGE_AVAILABLE=false
 ERROR_HANDLED=false
 NGINX_QUIC_OPENSSL_REF_REQUESTED=""
+declare -A REGISTRY_LOCK_FDS=()
 
 # Color codes
 RED='\033[0;31m'
@@ -814,9 +831,19 @@ get_credential() {
 registry_lock() {
     local registry=$1
     local lock_file="$STATE_DIR/.${registry}.lock"
-    local lock_fd=200
     local max_wait=60
     local waited=0
+    local lock_fd=""
+    
+    if [[ -z "$registry" ]]; then
+        log_error "Registry name is required for locking"
+        return 1
+    fi
+    
+    if [[ -n "${REGISTRY_LOCK_FDS[$registry]:-}" ]]; then
+        log_trace "Lock already held for $registry"
+        return 0
+    fi
     
     # Create lock file if it doesn't exist
     touch "$lock_file" 2>/dev/null || {
@@ -825,37 +852,41 @@ registry_lock() {
     }
     
     # Open file descriptor for locking
-    eval "exec $lock_fd>\"$lock_file\""
+    if ! exec {lock_fd}>"$lock_file"; then
+        log_error "Cannot open lock file descriptor: $lock_file"
+        return 1
+    fi
     
     # Try to acquire exclusive lock with timeout
-    while ! flock -n $lock_fd 2>/dev/null; do
+    while ! flock -n "$lock_fd" 2>/dev/null; do
         sleep 0.5
         waited=$((waited + 1))
         
         if [[ $waited -ge $((max_wait * 2)) ]]; then
             log_error "Failed to acquire lock for $registry after ${max_wait}s"
             log_security "LOCK_TIMEOUT" "Registry lock timeout: $registry"
-            eval "exec $lock_fd>&-"
+            exec {lock_fd}>&- 2>/dev/null || true
             return 1
-        fi
-        
-        # Check if lock file is stale (>5 minutes old)
-        if [[ -f "$lock_file" ]]; then
-            local lock_age=$(($(date +%s) - $(stat -c %Y "$lock_file" 2>/dev/null || echo 0)))
-            if [[ $lock_age -gt 300 ]]; then
-                log_warn "Stale lock detected for $registry (age: ${lock_age}s), breaking lock"
-                rm -f "$lock_file"
-                touch "$lock_file"
-            fi
         fi
     done
     
     # Lock acquired successfully
+    REGISTRY_LOCK_FDS["$registry"]=$lock_fd
     log_trace "Lock acquired for $registry (waited: ${waited}ms)"
-    
-    # Set trap to release lock on function return or script exit (never fail)
-    trap "flock -u $lock_fd 2>/dev/null || true; eval 'exec $lock_fd>&-' 2>/dev/null || true; rm -f '$lock_file' 2>/dev/null || true" RETURN EXIT
-    
+    return 0
+}
+
+registry_unlock() {
+    local registry=$1
+    local lock_fd="${REGISTRY_LOCK_FDS[$registry]:-}"
+
+    if [[ -z "$registry" || -z "$lock_fd" ]]; then
+        return 0
+    fi
+
+    flock -u "$lock_fd" 2>/dev/null || true
+    exec {lock_fd}>&- 2>/dev/null || true
+    unset "REGISTRY_LOCK_FDS[$registry]"
     return 0
 }
 
@@ -896,6 +927,9 @@ execute_rollback() {
 
 safe_cleanup() {
     local path=$1
+    local normalized_path=""
+    local allowed=false
+    local base=""
     
     # Validate path is not dangerous
     if [[ "$path" == "/" ]] || [[ "$path" == "/root" ]] || [[ "$path" == "/home" ]] || \
@@ -904,9 +938,23 @@ safe_cleanup() {
         log_security "DANGEROUS_OPERATION" "Attempted cleanup of system path: $path"
         return 1
     fi
+
+    normalized_path="${path%/}"
+    [[ -z "$normalized_path" ]] && normalized_path="$path"
     
     # Only cleanup if path is within expected directories
-    if [[ "$path" =~ ^($SITES_DIR|$BACKUP_DIR|$CACHE_DIR|/tmp/wp-) ]]; then
+    for base in "$SITES_DIR" "$BACKUP_DIR" "$CACHE_DIR"; do
+        local normalized_base="${base%/}"
+        if [[ "$normalized_path" == "$normalized_base" || "$normalized_path" == "$normalized_base/"* ]]; then
+            allowed=true
+            break
+        fi
+    done
+    if [[ "$allowed" != "true" && "$normalized_path" == /tmp/wp-* ]]; then
+        allowed=true
+    fi
+
+    if [[ "$allowed" == "true" ]]; then
         if [[ -d "$path" ]] || [[ -f "$path" ]]; then
             rm -rf "$path" 2>/dev/null || {
                 log_warn "Failed to cleanup: $path"
@@ -966,15 +1014,17 @@ REDIS_ALLOC
 
 redis_allocate_db() {
     local domain=$1
+    local lock_name="redis-allocator"
     
     # Acquire atomic lock
-    registry_lock "redis-allocator" || return 1
+    registry_lock "$lock_name" || return 1
     
     local allocator="$STATE_DIR/redis-allocator.json"
     
     # Validate JSON file exists and is readable
     if [[ ! -f "$allocator" ]]; then
         log_error "Redis allocator registry not found" >&2
+        registry_unlock "$lock_name"
         return 1
     fi
     
@@ -982,6 +1032,7 @@ redis_allocate_db() {
     local existing=$(jq -r ".allocations[\"$domain\"].db // \"null\"" "$allocator" 2>/dev/null)
     if [[ "$existing" != "null" ]]; then
         log_warn "Domain already has Redis DB allocated: $domain (DB: $existing)" >&2
+        registry_unlock "$lock_name"
         echo "$existing"
         return 0
     fi
@@ -992,6 +1043,7 @@ redis_allocate_db() {
     if [[ -z "$available" ]] || [[ "$available" == "null" ]]; then
         log_error "No available Redis databases for $domain" >&2
         log_security "RESOURCE_EXHAUSTION" "Redis database pool exhausted"
+        registry_unlock "$lock_name"
         return 1
     fi
     
@@ -1011,6 +1063,7 @@ redis_allocate_db() {
         
         log_error "Failed to update Redis allocator" >&2
         mv "${allocator}.backup" "$allocator"
+        registry_unlock "$lock_name"
         return 1
     fi
     
@@ -1020,15 +1073,17 @@ redis_allocate_db() {
     log_success "Allocated Redis DB $available for $domain" >&2
     log_audit "REDIS_DB_ALLOCATE" "domain=$domain db=$available"
     
+    registry_unlock "$lock_name"
     echo "$available"
     return 0
 }
 
 redis_release_db() {
     local domain=$1
+    local lock_name="redis-allocator"
     
     # Acquire atomic lock
-    registry_lock "redis-allocator" || return 1
+    registry_lock "$lock_name" || return 1
     
     local allocator="$STATE_DIR/redis-allocator.json"
     
@@ -1037,6 +1092,7 @@ redis_release_db() {
     
     if [[ -z "$db" ]] || [[ "$db" == "null" ]]; then
         log_warn "Redis DB not found for $domain (may already be released)" >&2
+        registry_unlock "$lock_name"
         return 0
     fi
     
@@ -1059,6 +1115,7 @@ redis_release_db() {
         
         log_error "Failed to update Redis allocator during release" >&2
         mv "${allocator}.backup" "$allocator"
+        registry_unlock "$lock_name"
         return 1
     fi
     
@@ -1068,6 +1125,7 @@ redis_release_db() {
     log_success "Released Redis DB $db for $domain" >&2
     log_audit "REDIS_DB_RELEASE" "domain=$domain db=$db"
     
+    registry_unlock "$lock_name"
     return 0
 }
 
@@ -1079,21 +1137,24 @@ domain_register() {
     local db_user=$5
     local site_title=${6:-}
     local admin_email=${7:-}
+    local lock_name="domain"
     
     # Acquire atomic lock
-    registry_lock "domain" || return 1
+    registry_lock "$lock_name" || return 1
     
     local registry="$REGISTRY_FILE"
     
     # Validate inputs
     [[ -z "$domain" ]] || [[ -z "$redis_db" ]] || [[ -z "$pool_name" ]] && {
         log_error "Missing required parameters for domain registration"
+        registry_unlock "$lock_name"
         return 1
     }
     
     # Check if domain already registered
     if jq -e ".domains[\"$domain\"]" "$registry" >/dev/null 2>&1; then
         log_error "Domain already registered: $domain"
+        registry_unlock "$lock_name"
         return 1
     fi
     
@@ -1128,6 +1189,7 @@ domain_register() {
         
         log_error "Failed to update domain registry"
         mv "${registry}.backup" "$registry"
+        registry_unlock "$lock_name"
         return 1
     fi
     
@@ -1137,20 +1199,23 @@ domain_register() {
     log_success "Domain registered: $domain"
     log_audit "DOMAIN_REGISTER" "domain=$domain redis_db=$redis_db pool=$pool_name"
     
+    registry_unlock "$lock_name"
     return 0
 }
 
 domain_unregister() {
     local domain=$1
+    local lock_name="domain"
     
     # Acquire atomic lock
-    registry_lock "domain" || return 1
+    registry_lock "$lock_name" || return 1
     
     local registry="$REGISTRY_FILE"
     
     # Check if domain exists
     if ! jq -e ".domains[\"$domain\"]" "$registry" >/dev/null 2>&1; then
         log_warn "Domain not found in registry: $domain"
+        registry_unlock "$lock_name"
         return 0
     fi
     
@@ -1165,6 +1230,7 @@ domain_unregister() {
         
         log_error "Failed to update domain registry during unregistration"
         mv "${registry}.backup" "$registry"
+        registry_unlock "$lock_name"
         return 1
     fi
     
@@ -1174,6 +1240,7 @@ domain_unregister() {
     log_success "Domain unregistered: $domain"
     log_audit "DOMAIN_UNREGISTER" "domain=$domain"
     
+    registry_unlock "$lock_name"
     return 0
 }
 
@@ -1537,10 +1604,11 @@ check_network() {
     if [[ "$connected" == "false" ]]; then
         log_error "No internet connectivity detected"
         log_info "Internet connection required for package installation"
-        exit 1
+        return 1
     fi
     
     log_success "Network connectivity confirmed"
+    return 0
 }
 
 check_dependencies() {
@@ -1599,35 +1667,179 @@ initialize_directories() {
     log_success "Directory structure created"
 }
 
+disable_known_nginx_module_loader_files() {
+    local conf=""
+    local changed="false"
+    local known_confs=(
+        /etc/nginx/modules-enabled/50-mod-http-brotli.conf
+        /etc/nginx/modules-enabled/60-mod-http-zstd.conf
+        /etc/nginx/modules-enabled/55-mod-http-cache-purge.conf
+        /etc/nginx/modules-enabled/50-mod-http-zstd.conf
+        /etc/nginx/modules-enabled/50-mod-http-cache-purge.conf
+    )
+
+    for conf in "${known_confs[@]}"; do
+        [[ -f "$conf" ]] || continue
+        if declare -F disable_nginx_module_loader_file >/dev/null 2>&1; then
+            disable_nginx_module_loader_file "$conf" || true
+        else
+            mv "$conf" "${conf}.disabled.$(date +%s)" 2>/dev/null || rm -f "$conf" 2>/dev/null || true
+            log_warn "Disabled Nginx module loader file: $conf"
+        fi
+        changed="true"
+    done
+
+    [[ "$changed" == "true" ]]
+}
+
 safe_apt_install() {
     local packages=("$@")
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        log_warn "safe_apt_install called with no packages"
+        return 0
+    fi
+
     log_info "Installing packages: ${packages[*]}"
-    
-    # Update package lists if needed (max once per hour)
+    local touches_nginx=0
+    local pkg
+    for pkg in "${packages[@]}"; do
+        if [[ "$pkg" == "nginx" || "$pkg" == nginx-* || "$pkg" == libnginx-mod-* || "$pkg" == nginx-module-* ]]; then
+            touches_nginx=1
+            break
+        fi
+    done
+
+    # Update package lists when missing or older than 1 hour.
     local last_update_file="/var/lib/apt/periodic/update-success-stamp"
+    local should_update=1
     if [[ -f "$last_update_file" ]]; then
-        local last_update=$(stat -c %Y "$last_update_file")
-        local now=$(date +%s)
-        if [[ $((now - last_update)) -gt 3600 ]]; then
-            apt-get update >/dev/null 2>&1 || {
-                log_error "Failed to update package lists"
-                return 1
-            }
+        local last_update
+        last_update=$(stat -c %Y "$last_update_file" 2>/dev/null || echo 0)
+        local now
+        now=$(date +%s)
+        if [[ "$last_update" =~ ^[0-9]+$ ]] && [[ $((now - last_update)) -le 3600 ]]; then
+            should_update=0
         fi
     fi
-    
-    # Install packages with error handling
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" 2>&1 | tee -a "$LOG_DEBUG_FILE" >/dev/null; then
-        log_error "Package installation failed: ${packages[*]}"
-        log_info "Check $LOG_DEBUG_FILE for details"
-        return 1
+    if [[ $should_update -eq 1 ]]; then
+        apt-get update >/dev/null 2>&1 || {
+            log_error "Failed to update package lists"
+            return 1
+        }
     fi
-    
-    # Track installed packages
-    INSTALLED_PACKAGES+=("${packages[@]}")
-    
-    log_success "Packages installed successfully"
-    return 0
+
+    # If a previous Nginx package transaction is stuck, try to self-heal first.
+    local dpkg_audit=""
+    dpkg_audit=$(dpkg --audit 2>/dev/null || true)
+    if [[ -n "$dpkg_audit" ]] && echo "$dpkg_audit" | grep -qiE '(^|[[:space:]])nginx([[:space:]]|$)|nginx-common'; then
+        log_warn "Detected partially configured Nginx packages; attempting recovery"
+        if command -v nginx >/dev/null 2>&1; then
+            if declare -F write_nginx_dynamic_module_conf >/dev/null 2>&1; then
+                write_nginx_dynamic_module_conf || true
+            fi
+            if declare -F write_nginx_performance_snippet >/dev/null 2>&1; then
+                write_nginx_performance_snippet || true
+            fi
+            if declare -F write_nginx_http3_snippet >/dev/null 2>&1; then
+                write_nginx_http3_snippet || true
+            fi
+            if declare -F validate_nginx_config_or_recover_modules >/dev/null 2>&1; then
+                validate_nginx_config_or_recover_modules "Nginx configuration invalid during APT recovery" || true
+            fi
+            disable_known_nginx_module_loader_files || true
+            if declare -F write_nginx_performance_snippet >/dev/null 2>&1; then
+                write_nginx_performance_snippet || true
+            fi
+            if declare -F write_nginx_http3_snippet >/dev/null 2>&1; then
+                write_nginx_http3_snippet || true
+            fi
+            if declare -F validate_nginx_config_or_recover_modules >/dev/null 2>&1; then
+                validate_nginx_config_or_recover_modules "Nginx configuration invalid after disabling known module loader files" || true
+            fi
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        DEBIAN_FRONTEND=noninteractive dpkg --configure -a >/dev/null 2>&1 || true
+    fi
+
+    # Install packages with one recovery retry for interrupted/broken dpkg state.
+    local attempt=1
+    local max_attempts=2
+    while [[ $attempt -le $max_attempts ]]; do
+        if command -v nginx >/dev/null 2>&1; then
+            if declare -F write_nginx_dynamic_module_conf >/dev/null 2>&1; then
+                write_nginx_dynamic_module_conf || true
+            fi
+            if declare -F write_nginx_performance_snippet >/dev/null 2>&1; then
+                write_nginx_performance_snippet || true
+            fi
+            if declare -F write_nginx_http3_snippet >/dev/null 2>&1; then
+                write_nginx_http3_snippet || true
+            fi
+            if declare -F validate_nginx_config_or_recover_modules >/dev/null 2>&1; then
+                validate_nginx_config_or_recover_modules "Nginx configuration invalid before APT transaction" || true
+            fi
+            if [[ $touches_nginx -eq 1 ]]; then
+                disable_known_nginx_module_loader_files || true
+                if declare -F write_nginx_performance_snippet >/dev/null 2>&1; then
+                    write_nginx_performance_snippet || true
+                fi
+                if declare -F write_nginx_http3_snippet >/dev/null 2>&1; then
+                    write_nginx_http3_snippet || true
+                fi
+                if declare -F validate_nginx_config_or_recover_modules >/dev/null 2>&1; then
+                    validate_nginx_config_or_recover_modules "Nginx configuration invalid before Nginx package transaction" || true
+                fi
+            fi
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+
+        local apt_status=0
+        local tee_status=0
+        local -a _apt_pipe_status=()
+        set +e
+        set +o pipefail
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" 2>&1 | tee -a "$LOG_DEBUG_FILE" >/dev/null
+        _apt_pipe_status=("${PIPESTATUS[@]}")
+        apt_status=${_apt_pipe_status[0]:-1}
+        tee_status=${_apt_pipe_status[1]:-0}
+        set -o pipefail
+        set -e
+
+        if [[ $tee_status -ne 0 ]]; then
+            log_warn "Unable to write full APT output to $LOG_DEBUG_FILE"
+        fi
+
+        if [[ $apt_status -eq 0 ]]; then
+            INSTALLED_PACKAGES+=("${packages[@]}")
+            log_success "Packages installed successfully"
+            return 0
+        fi
+
+        if [[ $attempt -lt $max_attempts ]]; then
+            log_warn "APT install attempt $attempt failed; trying package manager recovery"
+            if command -v nginx >/dev/null 2>&1 && declare -F validate_nginx_config_or_recover_modules >/dev/null 2>&1; then
+                validate_nginx_config_or_recover_modules "Nginx configuration invalid during APT retry recovery" || true
+            fi
+            if command -v nginx >/dev/null 2>&1; then
+                disable_known_nginx_module_loader_files || true
+                if declare -F write_nginx_performance_snippet >/dev/null 2>&1; then
+                    write_nginx_performance_snippet || true
+                fi
+                if declare -F write_nginx_http3_snippet >/dev/null 2>&1; then
+                    write_nginx_http3_snippet || true
+                fi
+            fi
+            systemctl daemon-reload >/dev/null 2>&1 || true
+            dpkg --configure -a >/dev/null 2>&1 || true
+            DEBIAN_FRONTEND=noninteractive apt-get -f install -y >/dev/null 2>&1 || true
+            apt-get update >/dev/null 2>&1 || true
+        fi
+        ((attempt++))
+    done
+
+    log_error "Package installation failed: ${packages[*]}"
+    log_info "Check $LOG_DEBUG_FILE for details"
+    return 1
 }
 
 check_php_package_availability() {
@@ -2114,6 +2326,43 @@ nginx_module_enabled() {
     compgen -G "/etc/nginx/modules-enabled/*${pattern}*.conf" >/dev/null 2>&1
 }
 
+nginx_directive_available() {
+    local directive=$1
+    [[ -n "$directive" ]] || return 1
+    if ! command -v nginx &>/dev/null; then
+        return 1
+    fi
+
+    local tmp_conf
+    tmp_conf=$(mktemp /tmp/dazestack-nginx-directive.XXXXXX.conf 2>/dev/null || true)
+    [[ -n "$tmp_conf" ]] || return 1
+
+    local include_modules=""
+    if compgen -G "/etc/nginx/modules-enabled/*.conf" >/dev/null 2>&1; then
+        include_modules="include /etc/nginx/modules-enabled/*.conf;"
+    fi
+
+    cat > "$tmp_conf" <<NGINX_DIR_TEST
+$include_modules
+events {
+    worker_connections 64;
+}
+http {
+    $directive
+}
+NGINX_DIR_TEST
+
+    local test_output=""
+    if test_output=$(nginx -t -c "$tmp_conf" 2>&1); then
+        rm -f "$tmp_conf" 2>/dev/null || true
+        return 0
+    fi
+
+    log_debug "Nginx directive probe failed ($directive): $test_output"
+    rm -f "$tmp_conf" 2>/dev/null || true
+    return 1
+}
+
 detect_http3_support() {
     HTTP3_AVAILABLE=false
     if [[ "$ENABLE_HTTP3" != "true" ]]; then
@@ -2140,13 +2389,7 @@ detect_brotli_support() {
     if ! command -v nginx &>/dev/null; then
         return 0
     fi
-    if nginx_module_enabled "brotli"; then
-        BROTLI_AVAILABLE=true
-        log_success "Brotli support detected"
-        return 0
-    fi
-
-    if nginx -V 2>&1 | grep -qiE -- '--add-module=[^ ]*brotli|--with-http_brotli_module'; then
+    if nginx_directive_available "brotli on;"; then
         BROTLI_AVAILABLE=true
         log_success "Brotli support detected"
     else
@@ -2162,13 +2405,7 @@ detect_zstd_support() {
     if ! command -v nginx &>/dev/null; then
         return 0
     fi
-    if nginx_module_enabled "zstd"; then
-        ZSTD_AVAILABLE=true
-        log_success "Zstd support detected"
-        return 0
-    fi
-
-    if nginx -V 2>&1 | grep -qiE -- '--add-module=[^ ]*zstd|--with-http_zstd_module'; then
+    if nginx_directive_available "zstd on;"; then
         ZSTD_AVAILABLE=true
         log_success "Zstd support detected"
     else
@@ -2189,12 +2426,7 @@ detect_cache_purge_support() {
         return 0
     fi
 
-    if nginx -V 2>&1 | grep -qiE -- '--add-module=[^ ]*cache[-_]?purge|--with-http_cache_purge_module'; then
-        CACHE_PURGE_AVAILABLE=true
-        log_success "Nginx cache purge module detected"
-    else
-        log_warn "Nginx cache purge module not detected"
-    fi
+    log_info "Nginx cache purge module not detected (optional feature; purge endpoints disabled)"
 }
 
 write_nginx_main_config() {
@@ -2287,40 +2519,44 @@ NGINX_SECURITY
 write_nginx_performance_snippet() {
     detect_brotli_support
     detect_zstd_support
-    cat > /etc/nginx/snippets/wordpress-performance.conf <<'NGINX_PERF'
-# Compression (prefer zstd when client accepts; brotli/gzip fallback)
+    local gzip_level="${GZIP_COMP_LEVEL:-5}"
+    local brotli_level="${BROTLI_COMP_LEVEL:-5}"
+    local zstd_level="${ZSTD_COMP_LEVEL:-3}"
+    cat > /etc/nginx/snippets/wordpress-performance.conf <<NGINX_PERF
+# Compression priority: zstd (primary) -> brotli (secondary) -> gzip (last fallback)
+# Note: dynamic module load order is managed to prefer zstd over brotli.
 gzip on;
 gzip_vary on;
 gzip_proxied any;
 gzip_http_version 1.1;
 gzip_min_length 1000;
-gzip_comp_level 5;
+gzip_comp_level $gzip_level;
 gzip_static on;
 gzip_disable "msie6";
 gzip_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/xml+rss application/rss+xml application/atom+xml application/xhtml+xml image/svg+xml application/manifest+json;
 add_header Vary "Accept-Encoding" always;
 NGINX_PERF
 
-    if [[ "$BROTLI_AVAILABLE" == "true" ]]; then
-        cat >> /etc/nginx/snippets/wordpress-performance.conf <<'NGINX_BROTLI'
-# Brotli (if module available)
-brotli on;
-brotli_comp_level 5;
-brotli_min_length 1000;
-brotli_static on;
-brotli_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/xml+rss application/rss+xml application/atom+xml application/xhtml+xml image/svg+xml application/manifest+json;
-NGINX_BROTLI
-    fi
-
     if [[ "$ZSTD_AVAILABLE" == "true" ]]; then
-        cat >> /etc/nginx/snippets/wordpress-performance.conf <<'NGINX_ZSTD'
-# Zstandard (if module available)
+        cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_ZSTD
+# Zstandard (primary when module/client support is available)
 zstd on;
-zstd_comp_level 3;
+zstd_comp_level $zstd_level;
 zstd_min_length 1000;
 zstd_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/xml+rss application/rss+xml application/atom+xml application/xhtml+xml image/svg+xml application/manifest+json;
 zstd_static on;
 NGINX_ZSTD
+    fi
+
+    if [[ "$BROTLI_AVAILABLE" == "true" ]]; then
+        cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_BROTLI
+# Brotli (secondary fallback when zstd is unavailable to client)
+brotli on;
+brotli_comp_level $brotli_level;
+brotli_min_length 1000;
+brotli_static on;
+brotli_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/xml+rss application/rss+xml application/atom+xml application/xhtml+xml image/svg+xml application/manifest+json;
+NGINX_BROTLI
     fi
 }
 
@@ -2549,29 +2785,48 @@ IMG_CRON
 }
 
 write_microcache_config() {
+    local skip_args_default=0
+    local skip_auth_default=0
+    local cache_bg_update="off"
+    local cache_revalidate="off"
+    local cache_max_size="${NGINX_CACHE_MAX_SIZE:-}"
+    local disk_total_mb=""
+
+    [[ "$FASTCGI_SKIP_QUERY_STRING" == "true" ]] && skip_args_default=1
+    [[ "$FASTCGI_CACHE_BYPASS_AUTHORIZATION" == "true" ]] && skip_auth_default=1
+    [[ "$FASTCGI_CACHE_BACKGROUND_UPDATE" == "true" ]] && cache_bg_update="on"
+    [[ "$FASTCGI_CACHE_REVALIDATE" == "true" ]] && cache_revalidate="on"
+
+    # Ensure max cache size is always valid, even if resource calculation has not run.
+    if [[ -z "$cache_max_size" ]]; then
+        disk_total_mb=$(df -m / 2>/dev/null | awk 'NR==2 {print $2}')
+        if [[ "$disk_total_mb" =~ ^[0-9]+$ ]] && [[ "$disk_total_mb" -lt 20000 ]]; then
+            cache_max_size="256m"
+        else
+            cache_max_size="1g"
+        fi
+    fi
+    NGINX_CACHE_MAX_SIZE="$cache_max_size"
+
     cat > /etc/nginx/conf.d/10-cache-zones.conf <<'NGINX_CACHE'
 # FastCGI micro-cache zones
 fastcgi_cache_path /var/cache/nginx/microcache 
     levels=1:2 
     keys_zone=wordpress_cache:100m 
     max_size=CACHE_MAX_SIZE 
-    inactive=60m 
+    inactive=CACHE_INACTIVE 
     use_temp_path=off;
 
-# Cache key segmentation by Accept-Encoding (zstd > br > gzip)
-map $http_accept_encoding $dazestack_cache_encoding {
-    default "identity";
-    "~*zstd" "zstd";
-    "~*br" "br";
-    "~*gzip" "gzip";
-}
-
-fastcgi_cache_key "$scheme$request_method$host$request_uri:$dazestack_cache_encoding";
+# Keep cache key aligned with purge key logic.
+# GET/HEAD are cached, so request method is omitted from the key.
+fastcgi_cache_key "$scheme$host$request_uri";
 fastcgi_cache_use_stale updating error timeout invalid_header http_500 http_503;
 fastcgi_cache_lock on;
 fastcgi_cache_lock_timeout 5s;
+fastcgi_cache_background_update CACHE_BACKGROUND_UPDATE;
+fastcgi_cache_revalidate CACHE_REVALIDATE;
 
-map $http_cookie $skip_cache {
+map $http_cookie $skip_cache_cookie {
     default 0;
     ~*wordpress_logged_in 1;
     ~*wordpress_sec 1;
@@ -2597,13 +2852,48 @@ map $request_uri $skip_cache_uri {
     ~*/wp-cron.php 1;
     ~*/wp-json/ 1;
     ~*/purge/ 1;
+    ~*/cart/?$ 1;
+    ~*/checkout/?$ 1;
+    ~*/my-account/ 1;
     ~*preview=true 1;
     ~*add-to-cart 1;
     ~*wc-api 1;
     ~*xmlrpc.php 1;
 }
+
+map $http_authorization $skip_cache_auth {
+    default CACHE_SKIP_AUTH;
+    "" 0;
+}
+
+map $args $skip_cache_args {
+    default CACHE_SKIP_ARGS;
+    "" 0;
+}
+
+map $http_cache_control $skip_cache_cache_control {
+    default 0;
+    ~*no-cache|no-store|max-age=0 1;
+}
+
+map $http_pragma $skip_cache_pragma {
+    default 0;
+    ~*no-cache 1;
+}
+
+map "$skip_cache_cookie$skip_cache_method$skip_cache_uri$skip_cache_auth$skip_cache_args$skip_cache_cache_control$skip_cache_pragma" $skip_cache_request {
+    default 1;
+    "0000000" 0;
+}
 NGINX_CACHE
-    sed -i "s/CACHE_MAX_SIZE/${NGINX_CACHE_MAX_SIZE}/" /etc/nginx/conf.d/10-cache-zones.conf
+    sed -i \
+        -e "s/CACHE_MAX_SIZE/${cache_max_size}/g" \
+        -e "s/CACHE_INACTIVE/${FASTCGI_CACHE_INACTIVE}/g" \
+        -e "s/CACHE_BACKGROUND_UPDATE/${cache_bg_update}/g" \
+        -e "s/CACHE_REVALIDATE/${cache_revalidate}/g" \
+        -e "s/CACHE_SKIP_ARGS/${skip_args_default}/g" \
+        -e "s/CACHE_SKIP_AUTH/${skip_auth_default}/g" \
+        /etc/nginx/conf.d/10-cache-zones.conf
 }
 
 write_php_tuning() {
@@ -2753,7 +3043,7 @@ write_nginx_build_state() {
 }
 
 ensure_nginx_systemd_service() {
-    if [[ -f /lib/systemd/system/nginx.service || -f /etc/systemd/system/nginx.service ]]; then
+    if [[ -f /lib/systemd/system/nginx.service || -f /usr/lib/systemd/system/nginx.service || -f /etc/systemd/system/nginx.service ]]; then
         return 0
     fi
     cat > /etc/systemd/system/nginx.service <<'NGINX_UNIT'
@@ -2782,14 +3072,14 @@ resolve_nginx_modules_path() {
     local path=""
 
     if command -v nginx >/dev/null 2>&1; then
-        path=$(nginx -V 2>&1 | tr ' ' '\n' | awk -F= '/^--modules-path=/{print $2; exit}')
+        path=$(nginx -V 2>&1 | tr ' ' '\n' | awk -F= '/^--modules-path=/{print $2; exit}' | tr -d '"' | xargs)
         if [[ -n "$path" && -d "$path" ]]; then
             echo "$path"
             return 0
         fi
     fi
 
-    for path in /usr/lib/nginx/modules /usr/lib64/nginx/modules /usr/local/nginx/modules /usr/modules; do
+    for path in /usr/lib/nginx/modules /usr/lib64/nginx/modules /usr/local/nginx/modules /usr/share/nginx/modules; do
         if [[ -d "$path" ]]; then
             echo "$path"
             return 0
@@ -2799,50 +3089,289 @@ resolve_nginx_modules_path() {
     return 1
 }
 
-write_nginx_dynamic_module_conf() {
-    mkdir -p /etc/nginx/modules-enabled 2>/dev/null || true
+find_nginx_module_file() {
+    local module_file=$1
+    [[ -z "$module_file" ]] && return 1
 
-    local module_dir=""
-    module_dir=$(resolve_nginx_modules_path 2>/dev/null || true)
+    local seen="|"
+    local dir=""
+    local preferred=""
+    preferred=$(resolve_nginx_modules_path 2>/dev/null || true)
 
-    if [[ -z "$module_dir" ]]; then
-        rm -f /etc/nginx/modules-enabled/50-mod-http-brotli.conf 2>/dev/null || true
-        rm -f /etc/nginx/modules-enabled/50-mod-http-zstd.conf 2>/dev/null || true
-        rm -f /etc/nginx/modules-enabled/50-mod-http-cache-purge.conf 2>/dev/null || true
+    if [[ -n "$preferred" && -d "$preferred" ]]; then
+        if [[ -f "${preferred}/${module_file}" ]]; then
+            echo "${preferred}/${module_file}"
+            return 0
+        fi
+        seen="${seen}${preferred}|"
+    fi
+
+    for dir in /usr/lib/nginx/modules /usr/lib64/nginx/modules /usr/local/nginx/modules /usr/share/nginx/modules; do
+        [[ -d "$dir" ]] || continue
+        [[ "$seen" == *"|${dir}|"* ]] && continue
+        if [[ -f "${dir}/${module_file}" ]]; then
+            echo "${dir}/${module_file}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+test_nginx_dynamic_module_set() {
+    local modules=("$@")
+    [[ ${#modules[@]} -gt 0 ]] || return 1
+    if ! command -v nginx >/dev/null 2>&1; then
+        return 1
+    fi
+
+    local module
+    for module in "${modules[@]}"; do
+        [[ -f "$module" ]] || return 1
+    done
+
+    local tmp_conf
+    tmp_conf=$(mktemp /tmp/dazestack-nginx-modtest.XXXXXX.conf 2>/dev/null || true)
+    [[ -n "$tmp_conf" ]] || return 1
+
+    {
+        for module in "${modules[@]}"; do
+            echo "load_module $module;"
+        done
+        cat <<'NGINX_MODULE_TEST'
+events {
+    worker_connections 64;
+}
+http {}
+NGINX_MODULE_TEST
+    } > "$tmp_conf"
+
+    local test_output=""
+    if test_output=$(nginx -t -c "$tmp_conf" 2>&1); then
+        rm -f "$tmp_conf" 2>/dev/null || true
         return 0
     fi
 
-    local brotli_filter="${module_dir}/ngx_http_brotli_filter_module.so"
-    local brotli_static="${module_dir}/ngx_http_brotli_static_module.so"
+    log_debug "Nginx module compatibility test failed (${modules[*]}): $test_output"
+    rm -f "$tmp_conf" 2>/dev/null || true
+    return 1
+}
 
-    if [[ -f "$brotli_filter" ]]; then
-        cat > /etc/nginx/modules-enabled/50-mod-http-brotli.conf <<BROTLI_CONF
-load_module $brotli_filter;
-load_module $brotli_static;
-BROTLI_CONF
-    else
-        rm -f /etc/nginx/modules-enabled/50-mod-http-brotli.conf 2>/dev/null || true
+write_nginx_module_loader_conf() {
+    local conf_path=$1
+    shift || true
+    local modules=("$@")
+
+    if [[ ${#modules[@]} -eq 0 ]]; then
+        rm -f "$conf_path" 2>/dev/null || true
+        return 1
     fi
 
-    local zstd_filter="${module_dir}/ngx_http_zstd_filter_module.so"
-    local zstd_static="${module_dir}/ngx_http_zstd_static_module.so"
-
-    if [[ -f "$zstd_filter" ]]; then
-        cat > /etc/nginx/modules-enabled/50-mod-http-zstd.conf <<ZSTD_CONF
-load_module $zstd_filter;
-load_module $zstd_static;
-ZSTD_CONF
-    else
-        rm -f /etc/nginx/modules-enabled/50-mod-http-zstd.conf 2>/dev/null || true
+    if ! test_nginx_dynamic_module_set "${modules[@]}"; then
+        rm -f "$conf_path" 2>/dev/null || true
+        return 1
     fi
 
-    local cache_purge="${module_dir}/ngx_http_cache_purge_module.so"
+    {
+        local module
+        for module in "${modules[@]}"; do
+            echo "load_module $module;"
+        done
+    } > "$conf_path"
+    return 0
+}
+
+disable_nginx_module_loader_file() {
+    local conf=$1
+    [[ -f "$conf" ]] || return 1
+
+    local disabled="${conf}.disabled"
+    if [[ -e "$disabled" ]]; then
+        disabled="${conf}.disabled.$(date +%s)"
+    fi
+    mv "$conf" "$disabled" 2>/dev/null || rm -f "$conf" 2>/dev/null || true
+    log_warn "Disabled incompatible Nginx module loader: $conf"
+    return 0
+}
+
+recover_nginx_module_version_mismatch() {
+    local test_output=$1
+    if [[ -z "$test_output" ]]; then
+        return 1
+    fi
+    if ! echo "$test_output" | grep -qiE 'module ".+" version [0-9]+ instead of [0-9]+ in /etc/nginx/modules-enabled/'; then
+        return 1
+    fi
+
+    local mismatch_confs
+    mismatch_confs=$(echo "$test_output" | sed -n 's|.* in \(/etc/nginx/modules-enabled/[^:[:space:]]\+\):[0-9]\+.*|\1|p' | sort -u)
+    [[ -n "$mismatch_confs" ]] || return 1
+
+    local changed=false
+    local conf
+    while IFS= read -r conf; do
+        [[ -z "$conf" ]] && continue
+        if [[ -f "$conf" ]]; then
+            disable_nginx_module_loader_file "$conf" || true
+            changed=true
+        fi
+    done <<< "$mismatch_confs"
+
+    if [[ "$changed" == "true" ]]; then
+        log_warn "Detected Nginx module ABI mismatch; retrying without incompatible module loader files"
+        return 0
+    fi
+    return 1
+}
+
+recover_nginx_unknown_optional_directive() {
+    local test_output=$1
+    if [[ -z "$test_output" ]]; then
+        return 1
+    fi
+    if ! echo "$test_output" | grep -qiE 'unknown directive "(brotli|zstd|http3_hq|quic_retry|quic_gso|ssl_early_data|http3)"'; then
+        return 1
+    fi
+
+    local directive
+    directive=$(echo "$test_output" | sed -n 's/.*unknown directive "\([^"]\+\)".*/\1/p' | head -1)
+    [[ -z "$directive" ]] && directive="unknown"
+    log_warn "Detected unsupported Nginx directive ($directive); regenerating optional feature snippets"
+
+    if declare -F write_nginx_dynamic_module_conf >/dev/null 2>&1; then
+        write_nginx_dynamic_module_conf || true
+    fi
+    if declare -F write_nginx_performance_snippet >/dev/null 2>&1; then
+        write_nginx_performance_snippet || true
+    fi
+    if declare -F write_nginx_http3_snippet >/dev/null 2>&1; then
+        write_nginx_http3_snippet || true
+    fi
+
+    return 0
+}
+
+recover_nginx_missing_module_file() {
+    local test_output=$1
+    if [[ -z "$test_output" ]]; then
+        return 1
+    fi
+    if ! echo "$test_output" | grep -qiE 'dlopen\(\) ".+" failed \(.+cannot open shared object file'; then
+        return 1
+    fi
+
+    local broken_confs
+    broken_confs=$(echo "$test_output" | sed -n 's|.* in \(/etc/nginx/modules-enabled/[^:[:space:]]\+\):[0-9]\+.*|\1|p' | sort -u)
+    [[ -n "$broken_confs" ]] || return 1
+
+    local changed=false
+    local conf
+    while IFS= read -r conf; do
+        [[ -z "$conf" ]] && continue
+        if [[ -f "$conf" ]]; then
+            disable_nginx_module_loader_file "$conf" || true
+            changed=true
+        fi
+    done <<< "$broken_confs"
+
+    if [[ "$changed" == "true" ]]; then
+        if declare -F write_nginx_dynamic_module_conf >/dev/null 2>&1; then
+            write_nginx_dynamic_module_conf || true
+        fi
+        log_warn "Detected missing Nginx module file; rebuilt module loader configuration"
+        return 0
+    fi
+    return 1
+}
+
+validate_nginx_config_or_recover_modules() {
+    local context=${1:-"Nginx configuration invalid"}
+    local test_output=""
+
+    if test_output=$(nginx -t 2>&1); then
+        return 0
+    fi
+
+    if recover_nginx_module_version_mismatch "$test_output"; then
+        if test_output=$(nginx -t 2>&1); then
+            log_warn "Nginx configuration recovered after disabling incompatible module loaders"
+            return 0
+        fi
+    fi
+    if recover_nginx_missing_module_file "$test_output"; then
+        if test_output=$(nginx -t 2>&1); then
+            log_warn "Nginx configuration recovered after rebuilding module loader paths"
+            return 0
+        fi
+    fi
+    if recover_nginx_unknown_optional_directive "$test_output"; then
+        if test_output=$(nginx -t 2>&1); then
+            log_warn "Nginx configuration recovered after stripping unsupported optional directives"
+            return 0
+        fi
+    fi
+
+    log_error "$context"
+    if [[ -n "$test_output" ]]; then
+        log_error "nginx -t output: $test_output"
+    fi
+    return 1
+}
+
+write_nginx_dynamic_module_conf() {
+    mkdir -p /etc/nginx/modules-enabled 2>/dev/null || true
+
+    # Explicit module order:
+    #  50 -> Brotli (secondary)
+    #  55 -> Cache purge
+    #  60 -> Zstd (primary)
+    local brotli_conf="/etc/nginx/modules-enabled/50-mod-http-brotli.conf"
+    local cache_purge_conf="/etc/nginx/modules-enabled/55-mod-http-cache-purge.conf"
+    local zstd_conf="/etc/nginx/modules-enabled/60-mod-http-zstd.conf"
+    local legacy_zstd_conf="/etc/nginx/modules-enabled/50-mod-http-zstd.conf"
+    local legacy_cache_purge_conf="/etc/nginx/modules-enabled/50-mod-http-cache-purge.conf"
+
+    # Remove legacy filenames to avoid duplicate module loading.
+    rm -f "$legacy_zstd_conf" "$legacy_cache_purge_conf" 2>/dev/null || true
+
+    local brotli_filter=""
+    local brotli_static=""
+    brotli_filter=$(find_nginx_module_file "ngx_http_brotli_filter_module.so" 2>/dev/null || true)
+    brotli_static=$(find_nginx_module_file "ngx_http_brotli_static_module.so" 2>/dev/null || true)
+    local brotli_modules=()
+    [[ -f "$brotli_filter" ]] && brotli_modules+=("$brotli_filter")
+    [[ -f "$brotli_static" ]] && brotli_modules+=("$brotli_static")
+    if [[ ${#brotli_modules[@]} -gt 0 ]]; then
+        if ! write_nginx_module_loader_conf "$brotli_conf" "${brotli_modules[@]}"; then
+            log_warn "Skipping incompatible Brotli dynamic module loader(s)"
+        fi
+    else
+        rm -f "$brotli_conf" 2>/dev/null || true
+    fi
+
+    local zstd_filter=""
+    local zstd_static=""
+    zstd_filter=$(find_nginx_module_file "ngx_http_zstd_filter_module.so" 2>/dev/null || true)
+    zstd_static=$(find_nginx_module_file "ngx_http_zstd_static_module.so" 2>/dev/null || true)
+    local zstd_modules=()
+    [[ -f "$zstd_filter" ]] && zstd_modules+=("$zstd_filter")
+    [[ -f "$zstd_static" ]] && zstd_modules+=("$zstd_static")
+    if [[ ${#zstd_modules[@]} -gt 0 ]]; then
+        if ! write_nginx_module_loader_conf "$zstd_conf" "${zstd_modules[@]}"; then
+            log_warn "Skipping incompatible Zstd dynamic module loader(s)"
+        fi
+    else
+        rm -f "$zstd_conf" 2>/dev/null || true
+    fi
+
+    local cache_purge=""
+    cache_purge=$(find_nginx_module_file "ngx_http_cache_purge_module.so" 2>/dev/null || true)
     if [[ -f "$cache_purge" ]]; then
-        cat > /etc/nginx/modules-enabled/50-mod-http-cache-purge.conf <<CACHE_PURGE_CONF
-load_module $cache_purge;
-CACHE_PURGE_CONF
+        if ! write_nginx_module_loader_conf "$cache_purge_conf" "$cache_purge"; then
+            log_warn "Skipping incompatible cache purge dynamic module loader"
+        fi
     else
-        rm -f /etc/nginx/modules-enabled/50-mod-http-cache-purge.conf 2>/dev/null || true
+        rm -f "$cache_purge_conf" 2>/dev/null || true
     fi
 }
 
@@ -3036,6 +3565,106 @@ brotli_build_pic() {
     return 0
 }
 
+cache_purge_module_required() {
+    [[ "$ENABLE_CACHE_PURGE_MODULE" == "true" && "$REQUIRE_CACHE_PURGE_MODULE" == "true" ]]
+}
+
+prepare_cache_purge_module_source() {
+    local module_dir=$1
+    local build_log=${2:-}
+
+    local requested_repo="${NGINX_CACHE_PURGE_REPO:-}"
+    local fallback_repo="${NGINX_CACHE_PURGE_REPO_FALLBACK:-}"
+    local requested_ref="${NGINX_CACHE_PURGE_REF:-}"
+
+    local repos=()
+    if [[ -n "$requested_repo" ]]; then
+        repos+=("$requested_repo")
+    fi
+    if [[ -n "$fallback_repo" && "$fallback_repo" != "$requested_repo" ]]; then
+        repos+=("$fallback_repo")
+    fi
+    [[ ${#repos[@]} -gt 0 ]] || return 1
+
+    local refs=()
+    if [[ -n "$requested_ref" ]]; then
+        refs+=("$requested_ref")
+    fi
+    if [[ "$requested_ref" != "main" ]]; then
+        refs+=("main")
+    fi
+    if [[ "$requested_ref" != "master" ]]; then
+        refs+=("master")
+    fi
+
+    local repo=""
+    local ref=""
+    for repo in "${repos[@]}"; do
+        if [[ -d "$module_dir/.git" ]]; then
+            local origin_url=""
+            origin_url=$(git -C "$module_dir" remote get-url origin 2>/dev/null || true)
+            if [[ -n "$origin_url" && "$origin_url" != "$repo" ]]; then
+                rm -rf "$module_dir"
+            fi
+        fi
+
+        if [[ ! -d "$module_dir/.git" ]]; then
+            rm -rf "$module_dir"
+            if [[ -n "$build_log" ]]; then
+                git clone "$repo" "$module_dir" >> "$build_log" 2>&1 || {
+                    log_warn "Failed to clone cache purge module from $repo"
+                    continue
+                }
+            else
+                git clone "$repo" "$module_dir" >/dev/null 2>&1 || {
+                    log_warn "Failed to clone cache purge module from $repo"
+                    continue
+                }
+            fi
+        fi
+
+        if [[ -n "$build_log" ]]; then
+            git -C "$module_dir" fetch --all --tags >> "$build_log" 2>&1 || true
+        else
+            git -C "$module_dir" fetch --all --tags >/dev/null 2>&1 || true
+        fi
+
+        local checked_out="false"
+        for ref in "${refs[@]}"; do
+            if ! git -C "$module_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1; then
+                continue
+            fi
+            if [[ -n "$build_log" ]]; then
+                if git -C "$module_dir" checkout "$ref" >> "$build_log" 2>&1; then
+                    checked_out="true"
+                    break
+                fi
+            else
+                if git -C "$module_dir" checkout "$ref" >/dev/null 2>&1; then
+                    checked_out="true"
+                    break
+                fi
+            fi
+        done
+
+        if [[ "$checked_out" == "false" && -n "$requested_ref" ]]; then
+            log_warn "Cache purge ref '$requested_ref' not available in $repo; using repository default branch"
+        fi
+
+        if [[ -f "${module_dir}/config" || -f "${module_dir}/auto/module" ]]; then
+            local current_ref=""
+            current_ref=$(git -C "$module_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "detached")
+            log_info "Using cache purge module source: $repo @ $current_ref"
+            return 0
+        fi
+
+        log_warn "Cache purge repository at $repo is missing addon module metadata"
+        rm -rf "$module_dir"
+    done
+
+    return 1
+}
+
 resolve_latest_openssl_ref() {
     local repo=$1
     local vendor=$2
@@ -3139,17 +3768,28 @@ build_nginx_from_source() {
             echo ""
             echo "===== Nginx source build $(date '+%Y-%m-%d %H:%M:%S %Z') ====="
             echo "Version: $version"
-            echo "HTTP/3: $ENABLE_HTTP3 | Brotli: $ENABLE_BROTLI | Zstd: $ENABLE_ZSTD"
+            echo "HTTP/3: $ENABLE_HTTP3 | Brotli: $ENABLE_BROTLI | Zstd: $ENABLE_ZSTD | CachePurge: $ENABLE_CACHE_PURGE_MODULE"
         } >> "$build_log" 2>/dev/null || true
     fi
 
     log_info "Preparing source build for Nginx $version"
-    safe_apt_install build-essential ca-certificates curl git perl cmake \
-        libpcre3-dev zlib1g-dev libssl-dev libbrotli-dev libzstd-dev \
-        libxslt1-dev libgd-dev pkg-config >/dev/null 2>&1 || {
+    local pcre_dev_pkg=""
+    pcre_dev_pkg=$(first_available_package libpcre2-dev libpcre3-dev || true)
+    if [[ -z "$pcre_dev_pkg" ]]; then
+        log_error "Missing PCRE development package (libpcre2-dev/libpcre3-dev)"
+        return 1
+    fi
+
+    local build_packages=(
+        build-essential ca-certificates curl git perl cmake
+        "$pcre_dev_pkg" zlib1g-dev libssl-dev libbrotli-dev libzstd-dev
+        libxslt1-dev libgd-dev pkg-config
+    )
+    safe_apt_install "${build_packages[@]}" || {
         log_error "Failed to install Nginx build dependencies"
         return 1
     }
+    log_info "Nginx build dependencies ready"
 
     local make_jobs
     make_jobs=$(nproc 2>/dev/null || echo 1)
@@ -3201,6 +3841,7 @@ build_nginx_from_source() {
     local src_dir="${NGINX_SOURCE_BUILD_ROOT}/nginx-${version}"
     local brotli_dir="${NGINX_SOURCE_BUILD_ROOT}/ngx_brotli"
     local zstd_dir="${NGINX_SOURCE_BUILD_ROOT}/zstd-nginx-module"
+    local cache_purge_dir="${NGINX_SOURCE_BUILD_ROOT}/ngx_cache_purge"
     local openssl_dir="${NGINX_SOURCE_BUILD_ROOT}/openssl-quic"
 
     rm -rf "$src_dir"
@@ -3244,6 +3885,16 @@ build_nginx_from_source() {
         if [[ -d "$zstd_dir/.git" ]]; then
             git -C "$zstd_dir" fetch --all >/dev/null 2>&1 || true
             git -C "$zstd_dir" checkout "$NGINX_ZSTD_REF" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if [[ "$ENABLE_CACHE_PURGE_MODULE" == "true" ]]; then
+        if ! prepare_cache_purge_module_source "$cache_purge_dir" "$build_log"; then
+            if cache_purge_module_required; then
+                log_error "Cache purge module is required but source checkout failed"
+                return 1
+            fi
+            log_warn "Failed to prepare cache purge module; continuing without cache purge"
         fi
     fi
 
@@ -3326,6 +3977,18 @@ build_nginx_from_source() {
     fi
     if [[ -d "$zstd_dir/.git" ]]; then
         add_modules+=("--add-dynamic-module=${zstd_dir}")
+    fi
+    if [[ -d "$cache_purge_dir/.git" ]]; then
+        add_modules+=("--add-dynamic-module=${cache_purge_dir}")
+    elif cache_purge_module_required; then
+        log_error "Cache purge module is required but source directory is unavailable: $cache_purge_dir"
+        return 1
+    fi
+
+    if [[ ${#add_modules[@]} -gt 0 ]]; then
+        log_info "Nginx dynamic modules: ${add_modules[*]}"
+    else
+        log_warn "Nginx build proceeding without dynamic addon modules"
     fi
 
     local cc_opt_arg=()
@@ -3427,7 +4090,37 @@ build_nginx_from_source() {
     fi
     popd >/dev/null || true
 
+    local cache_purge_module_path=""
+    if [[ "$ENABLE_CACHE_PURGE_MODULE" == "true" ]]; then
+        cache_purge_module_path=$(find_nginx_module_file "ngx_http_cache_purge_module.so" 2>/dev/null || true)
+        if [[ -z "$cache_purge_module_path" ]]; then
+            if cache_purge_module_required; then
+                log_error "Cache purge module was requested but ngx_http_cache_purge_module.so was not built"
+                return 1
+            fi
+            log_warn "Cache purge module not produced by this source build"
+        else
+            log_success "Cache purge module built: $cache_purge_module_path"
+        fi
+    fi
+
     write_nginx_dynamic_module_conf
+    if [[ -n "$cache_purge_module_path" ]]; then
+        local cache_loader_conf=""
+        if compgen -G "/etc/nginx/modules-enabled/*.conf" >/dev/null 2>&1; then
+            cache_loader_conf=$(grep -Rsl -- "ngx_http_cache_purge_module.so" /etc/nginx/modules-enabled/*.conf 2>/dev/null | head -1 || true)
+        fi
+        if [[ -z "$cache_loader_conf" ]]; then
+            if cache_purge_module_required; then
+                log_error "Cache purge module exists but loader conf was not written in /etc/nginx/modules-enabled"
+                return 1
+            fi
+            log_warn "Cache purge module exists but loader conf was not written"
+        else
+            log_success "Cache purge loader configured: $cache_loader_conf"
+        fi
+    fi
+
     ensure_nginx_systemd_service
     return 0
 }
@@ -3590,6 +4283,13 @@ run_nginx_auto_update() {
 
     log_info "Auto-update: rebuilding Nginx $latest (stable)"
     if build_nginx_from_source "$latest"; then
+        if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after auto-update source rebuild"; then
+            write_nginx_build_state "source" "$current" \
+                "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+                "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+                "failed" "auto-update produced invalid config"
+            return 1
+        fi
         detect_http3_support
         detect_brotli_support
         detect_zstd_support
@@ -3964,6 +4664,10 @@ phase_nginx() {
                 systemctl enable nginx >/dev/null 2>&1 || true
                 log_success "Nginx source build completed"
             else
+                if cache_purge_module_required; then
+                    log_error "Nginx source build failed while cache purge module is required; aborting install"
+                    exit 1
+                fi
                 log_warn "Nginx source build failed; falling back to package install"
             fi
         fi
@@ -3983,6 +4687,9 @@ phase_nginx() {
     detect_brotli_support
     detect_zstd_support
     detect_cache_purge_support
+    if [[ "$ENABLE_NGINX_HELPER" == "true" && "$CACHE_PURGE_AVAILABLE" != "true" ]]; then
+        log_warn "Nginx Helper is enabled but cache purge module is unavailable; plugin-assisted purge is disabled"
+    fi
     write_nginx_main_config
     write_nginx_security_snippet
     write_nginx_performance_snippet
@@ -3997,11 +4704,14 @@ phase_nginx() {
     configure_cloudflare_realip || log_warn "Cloudflare real IP configuration not applied"
     write_cloudflare_recommendations
     
-    if ! nginx -t >/dev/null 2>&1; then
-        log_error "Nginx configuration invalid"
+    if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid"; then
         exit 1
     fi
     systemctl restart nginx >/dev/null 2>&1 || true
+
+    if [[ "$ENABLE_HTTP2_FORCE_ALL" == "true" || "$ENABLE_HTTP3_FORCE_ALL" == "true" ]]; then
+        enable_http3_for_all_ssl_vhosts || true
+    fi
 
     if [[ "$used_source_build" == "true" ]]; then
         write_nginx_build_state "source" "$NGINX_SOURCE_VERSION" \
@@ -4246,26 +4956,10 @@ MAX_RUNTIME=600  # 10 minutes max
 
 # Atomic locking
 exec 200>"$LOCK_FILE"
-if ! flock -n 200; then
-    # Check if lock is stale
-    if [[ -f "$LOCK_FILE" ]]; then
-        lock_age=$(($(date +%s) - $(stat -c %Y "$LOCK_FILE" 2>/dev/null || echo 0)))
-        if [[ $lock_age -gt $MAX_RUNTIME ]]; then
-            flock -u 200 2>/dev/null || true
-            exec 200>&-
-            rm -f "$LOCK_FILE"
-            exec 200>"$LOCK_FILE"
-            flock -n 200 || exit 0
-        else
-            exit 0
-        fi
-    else
-        exit 0
-    fi
-fi
+flock -n 200 || exit 0
 
 # Set timeout
-trap 'flock -u 200; exec 200>&-; rm -f "$LOCK_FILE"' EXIT
+trap 'flock -u 200 2>/dev/null || true; exec 200>&- 2>/dev/null || true' EXIT
 timeout $MAX_RUNTIME bash -c '
 registry="/var/lib/dazestack-wp/state/domain-registry.json"
 [[ ! -f "$registry" ]] && exit 0
@@ -4788,9 +5482,15 @@ phase_summary() {
     echo "  $SCRIPT_NAME rebuild-nginx            # Rebuild source-built Nginx"
     echo "  $SCRIPT_NAME nginx-auto-update --enable|--disable|--run|--status"
     echo "  $SCRIPT_NAME enable-http3-all         # Enable HTTP/3 for all SSL vhosts"
+    echo "  $SCRIPT_NAME protocol-check [domain|--all] # Deep protocol readiness check (H2/H3/QUIC)"
+    echo "  $SCRIPT_NAME protocol-enforce [domain|--all] # Enforce modern protocol directives"
     echo "  $SCRIPT_NAME upgrade-sites            # Apply new features to existing sites"
     echo "  $SCRIPT_NAME remove-old-backups [days] # Remove backups older than N days"
     echo "  $SCRIPT_NAME compression-status       # Show gzip/brotli/zstd status"
+    echo "  $SCRIPT_NAME cache-status [domain|--all] # FastCGI cache HIT/MISS/BYPASS report"
+    echo "  $SCRIPT_NAME cache-deep-check [domain|--all] # Deep cache diagnostics"
+    echo "  $SCRIPT_NAME cache-purge-check       # Verify cache purge module wiring"
+    echo "  $SCRIPT_NAME compression-optimize [profile] # Optimize gzip/brotli/zstd levels"
     echo "  $SCRIPT_NAME factory-reset            # Remove stack, data, and configs"
     echo "  $SCRIPT_NAME refresh-installation     # Reinstall stack and reset defaults"
     echo "  $SCRIPT_NAME list-features            # Full feature list"
@@ -4821,13 +5521,116 @@ phase_summary() {
 # Purpose: Create, delete, and maintain WordPress sites.
 # =============================================================================
 
+collect_nginx_vhost_candidates() {
+    local conf=""
+    local real=""
+    local -A seen=()
+    local search_paths=(
+        /etc/nginx/sites-available/*
+        /etc/nginx/sites-enabled/*
+        /etc/nginx/conf.d/*
+    )
+
+    for conf in "${search_paths[@]}"; do
+        [[ -f "$conf" ]] || continue
+        case "$conf" in
+            *.swp|*~|*.bak|*.bak.*|*.disabled|*.disabled.*|*.dpkg-old|*.dpkg-dist|*.dpkg-new)
+                continue
+                ;;
+        esac
+        real=$(readlink -f "$conf" 2>/dev/null || echo "$conf")
+        [[ -z "$real" || ! -f "$real" ]] && continue
+        if [[ -z "${seen[$real]:-}" ]]; then
+            seen["$real"]=1
+            echo "$real"
+        fi
+    done
+}
+
+vhost_has_ssl_listener() {
+    local conf=$1
+    [[ -f "$conf" ]] || return 1
+    grep -qE '^[[:space:]]*listen[[:space:]]+[^;#]*443[^;#]*ssl([[:space:]]|;|$)' "$conf"
+}
+
+vhost_has_domain_server_name() {
+    local conf=$1
+    local domain=$2
+    [[ -f "$conf" && -n "$domain" ]] || return 1
+
+    local domain_lc=""
+    local www_lc=""
+    domain_lc=$(echo "$domain" | tr '[:upper:]' '[:lower:]')
+    if [[ "$domain_lc" =~ ^www\. ]]; then
+        www_lc="$domain_lc"
+    else
+        www_lc="www.$domain_lc"
+    fi
+
+    awk -v domain="$domain_lc" -v www_domain="$www_lc" '
+        function has_server_name_token(line, token,   n, i, arr) {
+            gsub(/;/, " ", line)
+            line=tolower(line)
+            sub(/^[[:space:]]*server_name[[:space:]]+/, "", line)
+            n=split(line, arr, /[[:space:]]+/)
+            for (i=1; i<=n; i++) {
+                if (arr[i] == token) {
+                    return 1
+                }
+            }
+            return 0
+        }
+        /^[[:space:]]*server_name[[:space:]]+/ {
+            if (has_server_name_token($0, domain) || has_server_name_token($0, www_domain)) {
+                found=1
+                exit
+            }
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$conf"
+}
+
+find_vhost_file_for_domain() {
+    local domain_raw=$1
+    local domain=""
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    local conf=""
+    local fallback=""
+    while IFS= read -r conf; do
+        [[ -f "$conf" ]] || continue
+        if vhost_has_domain_server_name "$conf" "$domain"; then
+            if vhost_has_ssl_listener "$conf"; then
+                echo "$conf"
+                return 0
+            fi
+            [[ -z "$fallback" ]] && fallback="$conf"
+        fi
+    done < <(collect_nginx_vhost_candidates)
+
+    [[ -n "$fallback" ]] && {
+        echo "$fallback"
+        return 0
+    }
+    return 1
+}
+
 maybe_enable_http3_for_site() {
     local domain=$1
     local conf="/etc/nginx/sites-available/${domain}.conf"
 
     detect_http3_support
-    [[ "$HTTP3_AVAILABLE" != "true" ]] && return 0
-    [[ ! -f "$conf" ]] && return 0
+    if [[ ! -f "$conf" ]]; then
+        conf=$(find_vhost_file_for_domain "$domain" 2>/dev/null || true)
+    fi
+    [[ -z "$conf" || ! -f "$conf" ]] && {
+        log_warn "No Nginx vhost file found for $domain; skipping HTTP/2/HTTP/3 patch"
+        return 1
+    }
+    if ! vhost_has_ssl_listener "$conf"; then
+        log_warn "No SSL listener found for $domain in $conf; run enable-ssl first"
+        return 1
+    fi
 
     if enable_http3_for_vhost_file "$conf"; then
         nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
@@ -4838,7 +5641,7 @@ enable_http3_for_vhost_file() {
     local conf=$1
     [[ -f "$conf" ]] || return 1
 
-    if ! grep -qE 'listen[[:space:]]+443[[:space:]]+ssl' "$conf"; then
+    if ! vhost_has_ssl_listener "$conf"; then
         return 1
     fi
 
@@ -4846,8 +5649,10 @@ enable_http3_for_vhost_file() {
     local enable_hq="${ENABLE_HTTP3_HQ:-false}"
     local enable_quic="${ENABLE_QUIC_TUNING:-true}"
     local enable_early="${ENABLE_TLS_EARLY_DATA:-false}"
+    local enable_http3="false"
+    [[ "$HTTP3_AVAILABLE" == "true" ]] && enable_http3="true"
 
-    if awk -v enable_hq="$enable_hq" -v enable_quic="$enable_quic" -v enable_early="$enable_early" '
+    if awk -v enable_http3="$enable_http3" -v enable_hq="$enable_hq" -v enable_quic="$enable_quic" -v enable_early="$enable_early" '
         function reset_flags() {
             has_ssl=0; has_ssl6=0; has_http2=0; has_quic=0; has_quic6=0;
             has_alt=0; has_alt29=0; has_alt_hq=0;
@@ -4857,15 +5662,15 @@ enable_http3_for_vhost_file() {
             reset_flags();
             for (i=1; i<=n; i++) {
                 line=buf[i];
-                if (line ~ /listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl/) {
+                if (line ~ /listen[[:space:]]+[^;#]*443[^;#]*ssl/) {
                     has_ssl=1;
                     if (line ~ /\[::\]:443/) { has_ssl6=1; }
                 }
                 if (line ~ /http2[[:space:]]+on;/ || line ~ /listen[[:space:]]+[^;]*443[^;]*http2/) {
                     has_http2=1;
                 }
-                if (line ~ /listen[[:space:]]+443[[:space:]]+quic/) { has_quic=1; }
-                if (line ~ /listen[[:space:]]+\[::\]:443[[:space:]]+quic/) { has_quic6=1; }
+                if (line ~ /listen[[:space:]]+[^;#]*443[^;#]*quic/) { has_quic=1; }
+                if (line ~ /listen[[:space:]]+[^;#]*\[::\]:443[^;#]*quic/) { has_quic6=1; }
                 if (line ~ /Alt-Svc/ && line ~ /h3=/) { has_alt=1; }
                 if (line ~ /Alt-Svc/ && line ~ /h3-29/) { has_alt29=1; }
                 if (line ~ /Alt-Svc/ && line ~ /hq-/) { has_alt_hq=1; }
@@ -4885,23 +5690,25 @@ enable_http3_for_vhost_file() {
             for (i=1; i<=n; i++) {
                 line=buf[i];
                 print line;
-                if (!inserted && line ~ /listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl/) {
+                if (!inserted && line ~ /listen[[:space:]]+[^;#]*443[^;#]*ssl/) {
                     match(line, /^[[:space:]]*/);
                     indent=substr(line, RSTART, RLENGTH);
                     if (!has_http2) print indent "http2 on;";
-                    if (!has_quic) print indent "listen 443 quic reuseport;";
-                    if (has_ssl6 && !has_quic6) print indent "listen [::]:443 quic reuseport;";
-                    if (!has_alt) print indent "add_header Alt-Svc " sq "h3=\":443\"; ma=86400" sq " always;";
-                    if (!has_alt29) print indent "add_header Alt-Svc " sq "h3-29=\":443\"; ma=86400" sq " always;";
-                    if (enable_hq == "true") {
-                        if (!has_http3_hq) print indent "http3_hq on;";
-                        if (!has_alt_hq) print indent "add_header Alt-Svc " sq "hq-29=\":443\"; ma=86400" sq " always;";
+                    if (enable_http3 == "true") {
+                        if (!has_quic) print indent "listen 443 quic reuseport;";
+                        if (has_ssl6 && !has_quic6) print indent "listen [::]:443 quic reuseport;";
+                        if (!has_alt) print indent "add_header Alt-Svc " sq "h3=\":443\"; ma=86400" sq " always;";
+                        if (!has_alt29) print indent "add_header Alt-Svc " sq "h3-29=\":443\"; ma=86400" sq " always;";
+                        if (enable_hq == "true") {
+                            if (!has_http3_hq) print indent "http3_hq on;";
+                            if (!has_alt_hq) print indent "add_header Alt-Svc " sq "hq-29=\":443\"; ma=86400" sq " always;";
+                        }
+                        if (enable_quic == "true") {
+                            if (!has_quic_retry) print indent "quic_retry on;";
+                            if (!has_quic_gso) print indent "quic_gso on;";
+                        }
+                        if (enable_early == "true" && !has_early) print indent "ssl_early_data on;";
                     }
-                    if (enable_quic == "true") {
-                        if (!has_quic_retry) print indent "quic_retry on;";
-                        if (!has_quic_gso) print indent "quic_gso on;";
-                    }
-                    if (enable_early == "true" && !has_early) print indent "ssl_early_data on;";
                     inserted=1;
                 }
             }
@@ -4974,36 +5781,18 @@ enable_http3_for_vhost_file() {
 enable_http3_for_all_ssl_vhosts() {
     detect_http3_support
     if [[ "$HTTP3_AVAILABLE" != "true" ]]; then
-        log_warn "HTTP/3 not supported by current Nginx build"
-        return 1
+        log_warn "HTTP/3 not supported by current Nginx build; enforcing HTTP/2 on SSL vhosts"
     fi
 
     local conf
     local changed=()
     local backups=()
+    local ssl_candidates=0
 
-    local -A seen=()
-    local candidates=()
-    local search_paths=(
-        /etc/nginx/sites-available/*.conf
-        /etc/nginx/sites-enabled/*.conf
-        /etc/nginx/conf.d/*.conf
-    )
-
-    for conf in "${search_paths[@]}"; do
+    while IFS= read -r conf; do
         [[ -f "$conf" ]] || continue
-        local real
-        real=$(readlink -f "$conf" 2>/dev/null || echo "$conf")
-        [[ -z "$real" ]] && real="$conf"
-        if [[ -z "${seen[$real]:-}" ]]; then
-            seen["$real"]=1
-            candidates+=("$real")
-        fi
-    done
-
-    for conf in "${candidates[@]}"; do
-        [[ -f "$conf" ]] || continue
-        if grep -qE 'listen[[:space:]]+(\[::\]:)?443[[:space:]]+ssl' "$conf"; then
+        if vhost_has_ssl_listener "$conf"; then
+            ((ssl_candidates++))
             cp "$conf" "${conf}.bak.http3" 2>/dev/null || true
             if enable_http3_for_vhost_file "$conf"; then
                 changed+=("$conf")
@@ -5012,10 +5801,15 @@ enable_http3_for_all_ssl_vhosts() {
                 rm -f "${conf}.bak.http3" 2>/dev/null || true
             fi
         fi
-    done
+    done < <(collect_nginx_vhost_candidates)
+
+    if [[ $ssl_candidates -eq 0 ]]; then
+        log_warn "No SSL vhosts detected. Enable SSL for domains first (enable-ssl <domain>)"
+        return 1
+    fi
 
     if [[ ${#changed[@]} -eq 0 ]]; then
-        log_info "No SSL vhosts updated (already patched or none found)"
+        log_info "No SSL vhosts updated (already compliant)"
         return 0
     fi
 
@@ -5025,7 +5819,11 @@ enable_http3_for_all_ssl_vhosts() {
         for conf in "${backups[@]}"; do
             rm -f "$conf" 2>/dev/null || true
         done
-        log_success "HTTP/3 enabled for ${#changed[@]} SSL vhost(s)"
+        if [[ "$HTTP3_AVAILABLE" == "true" ]]; then
+            log_success "HTTP/2+HTTP/3 enabled for ${#changed[@]} SSL vhost(s)"
+        else
+            log_success "HTTP/2 enforced for ${#changed[@]} SSL vhost(s)"
+        fi
         return 0
     fi
 
@@ -5038,6 +5836,193 @@ enable_http3_for_all_ssl_vhosts() {
             mv "${conf}.bak.http3" "$conf" 2>/dev/null || true
         fi
     done
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
+    return 1
+}
+
+extract_primary_server_name() {
+    local conf=$1
+    [[ -f "$conf" ]] || return 1
+    awk '
+        /^[[:space:]]*server_name[[:space:]]+/ {
+            line=$0
+            sub(/^[[:space:]]*server_name[[:space:]]+/, "", line)
+            gsub(/;/, "", line)
+            n=split(line, arr, /[[:space:]]+/)
+            for (i=1; i<=n; i++) {
+                if (arr[i] == "" || arr[i] == "_" || arr[i] ~ /^\*/) {
+                    continue
+                }
+                print arr[i]
+                exit
+            }
+        }
+    ' "$conf"
+}
+
+protocol_readiness_check() {
+    local target=${1:---all}
+    local conf=""
+    local -a files=()
+    local -A seen_files=()
+    local total=0
+    local failures=0
+    local http3_required="false"
+
+    detect_http3_support
+    [[ "$HTTP3_AVAILABLE" == "true" ]] && http3_required="true"
+
+    if [[ "$target" == "--all" || -z "$target" ]]; then
+        local domains=""
+        if [[ -f "$REGISTRY_FILE" ]]; then
+            domains=$(jq -r '.domains | keys[]' "$REGISTRY_FILE" 2>/dev/null || true)
+        fi
+
+        if [[ -n "$domains" ]]; then
+            local domain=""
+            for domain in $domains; do
+                [[ -z "$domain" ]] && continue
+                conf=$(find_vhost_file_for_domain "$domain" 2>/dev/null || true)
+                if [[ -n "$conf" && -f "$conf" && -z "${seen_files[$conf]:-}" ]]; then
+                    seen_files["$conf"]=1
+                    files+=("$conf")
+                fi
+            done
+        fi
+
+        # Fallback: inspect all SSL vhosts if registry is unavailable/empty.
+        if [[ ${#files[@]} -eq 0 ]]; then
+            while IFS= read -r conf; do
+                [[ -f "$conf" ]] || continue
+                vhost_has_ssl_listener "$conf" || continue
+                if [[ -z "${seen_files[$conf]:-}" ]]; then
+                    seen_files["$conf"]=1
+                    files+=("$conf")
+                fi
+            done < <(collect_nginx_vhost_candidates)
+        fi
+    else
+        local domain=""
+        domain=$(validate_domain "$target") || return 1
+        conf=$(find_vhost_file_for_domain "$domain" 2>/dev/null || true)
+        if [[ -z "$conf" || ! -f "$conf" ]]; then
+            log_error "No vhost file found for domain: $domain"
+            return 1
+        fi
+        files+=("$conf")
+    fi
+
+    if [[ ${#files[@]} -eq 0 ]]; then
+        log_error "No Nginx vhost files found"
+        return 1
+    fi
+
+    log_section "Protocol Readiness Check"
+    set_log_context "PROTOCOL" "CHECK"
+    echo "HTTP/3 compiled support: $HTTP3_AVAILABLE"
+    echo "HTTP/3 required for compliance: $http3_required"
+    echo ""
+
+    for conf in "${files[@]}"; do
+        [[ -f "$conf" ]] || continue
+        ((++total))
+
+        local has_ssl="false"
+        local has_http2="false"
+        local has_quic="false"
+        local has_alt="false"
+        local status="ok"
+        local server_name=""
+        local alpn="n/a"
+        local alt_svc_live="none"
+
+        vhost_has_ssl_listener "$conf" && has_ssl="true"
+        grep -qE 'http2[[:space:]]+on;|listen[[:space:]]+[^;#]*443[^;#]*http2' "$conf" && has_http2="true"
+        grep -qE 'listen[[:space:]]+[^;#]*443[^;#]*quic' "$conf" && has_quic="true"
+        grep -qiE 'add_header[[:space:]]+Alt-Svc[[:space:]]+.*h3=' "$conf" && has_alt="true"
+
+        if [[ "$has_ssl" != "true" ]]; then
+            status="no-ssl"
+            ((++failures))
+        elif [[ "$has_http2" != "true" ]]; then
+            status="ssl-no-http2"
+            ((++failures))
+        elif [[ "$http3_required" == "true" && ( "$has_quic" != "true" || "$has_alt" != "true" ) ]]; then
+            status="http2-no-http3"
+            ((++failures))
+        fi
+
+        server_name=$(extract_primary_server_name "$conf" 2>/dev/null || true)
+        if [[ "$has_ssl" == "true" && -n "$server_name" ]]; then
+            alpn=$(echo | openssl s_client -connect 127.0.0.1:443 -servername "$server_name" -alpn "h2,http/1.1" 2>/dev/null | awk -F': ' '/ALPN protocol:/ {print $2; exit}')
+            [[ -z "$alpn" ]] && alpn="unknown"
+            alt_svc_live=$(curl -ksSI --max-time 10 --resolve "${server_name}:443:127.0.0.1" "https://${server_name}/" 2>/dev/null \
+                | tr -d '\r' | awk -F': ' 'tolower($1)=="alt-svc" {print $2; exit}')
+            [[ -z "$alt_svc_live" ]] && alt_svc_live="none"
+        fi
+
+        echo "File: $conf"
+        echo "  server_name probe: ${server_name:-n/a}"
+        echo "  ssl_listener: $has_ssl"
+        echo "  http2_directive: $has_http2"
+        echo "  quic_listener: $has_quic"
+        echo "  alt_svc_config: $has_alt"
+        echo "  origin_alpn_local: $alpn"
+        echo "  origin_alt_svc_local: $alt_svc_live"
+        echo "  status: $status"
+        echo ""
+    done
+
+    echo "Summary: checked=$total failures=$failures"
+    if [[ $failures -eq 0 ]]; then
+        log_success "All checked vhosts are protocol-compliant"
+        return 0
+    fi
+    log_warn "Protocol gaps detected. Use: $SCRIPT_NAME protocol-enforce --all"
+    return 1
+}
+
+protocol_enforce() {
+    local target=${1:---all}
+    if [[ "$target" == "--all" || -z "$target" ]]; then
+        enable_http3_for_all_ssl_vhosts
+        return $?
+    fi
+
+    local domain=""
+    domain=$(validate_domain "$target") || return 1
+    local conf=""
+    conf=$(find_vhost_file_for_domain "$domain" 2>/dev/null || true)
+    if [[ -z "$conf" || ! -f "$conf" ]]; then
+        log_error "No vhost file found for domain: $domain"
+        return 1
+    fi
+    if ! vhost_has_ssl_listener "$conf"; then
+        log_error "No SSL listener found for $domain in $conf; run enable-ssl first"
+        return 1
+    fi
+
+    detect_http3_support
+    local backup="${conf}.bak.http3.$(date +%s)"
+    cp "$conf" "$backup" 2>/dev/null || true
+
+    if ! enable_http3_for_vhost_file "$conf"; then
+        rm -f "$backup" 2>/dev/null || true
+        log_info "No protocol changes required for $domain ($conf)"
+        return 0
+    fi
+
+    local test_output=""
+    if test_output=$(nginx -t 2>&1); then
+        systemctl reload nginx >/dev/null 2>&1 || true
+        rm -f "$backup" 2>/dev/null || true
+        log_success "Protocol directives enforced for $domain ($conf)"
+        return 0
+    fi
+
+    log_error "Nginx configuration invalid after protocol enforcement; rolling back"
+    [[ -n "$test_output" ]] && log_error "nginx -t output: $test_output"
+    [[ -f "$backup" ]] && mv "$backup" "$conf" 2>/dev/null || true
     nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
     return 1
 }
@@ -5168,12 +6153,14 @@ update_domain_registry_cdn() {
     local enabled=$2
     local url=$3
     local provider=$4
+    local lock_name="domain"
 
-    registry_lock "domain" || return 1
+    registry_lock "$lock_name" || return 1
     local registry="$REGISTRY_FILE"
 
     if ! jq -e ".domains[\"$domain\"]" "$registry" >/dev/null 2>&1; then
         log_error "Domain not found in registry: $domain"
+        registry_unlock "$lock_name"
         return 1
     fi
 
@@ -5190,11 +6177,13 @@ update_domain_registry_cdn() {
         "$registry" > "${registry}.tmp"; then
         log_error "Failed to update CDN settings in registry"
         mv "${registry}.backup" "$registry"
+        registry_unlock "$lock_name"
         return 1
     fi
 
     mv "${registry}.tmp" "$registry"
     rm -f "${registry}.backup"
+    registry_unlock "$lock_name"
     return 0
 }
 
@@ -5315,21 +6304,30 @@ update_vhost_image_optimization() {
     fi
 
     local tmp="${conf}.tmp"
-    local insert_line="    # Image optimization (AVIF/WebP when available)\n    include /etc/nginx/snippets/wordpress-images.conf;"
+    local insert_comment="    # Image optimization (AVIF/WebP when available)"
+    local insert_include="    include /etc/nginx/snippets/wordpress-images.conf;"
 
     if grep -q "# Static files caching" "$conf"; then
-        awk -v inc="$insert_line" '
-            !done && $0 ~ /# Static files caching/ { print inc; done=1 }
+        awk -v comment="$insert_comment" -v include="$insert_include" '
+            !done && $0 ~ /# Static files caching/ {
+                print comment
+                print include
+                done=1
+            }
             { print }
         ' "$conf" > "$tmp"
     else
-        awk -v inc="$insert_line" '
-            !done && $0 ~ /# PHP processing/ { print inc; done=1 }
+        awk -v comment="$insert_comment" -v include="$insert_include" '
+            !done && $0 ~ /# PHP processing/ {
+                print comment
+                print include
+                done=1
+            }
             { print }
         ' "$conf" > "$tmp"
     fi
 
-    if [[ -s "$tmp" ]]; then
+    if [[ -s "$tmp" ]] && grep -q "include /etc/nginx/snippets/wordpress-images.conf;" "$tmp"; then
         mv "$tmp" "$conf"
         log_info "Added image optimization include for $domain"
         return 0
@@ -5337,6 +6335,47 @@ update_vhost_image_optimization() {
     rm -f "$tmp"
     log_warn "Failed to update vhost for $domain"
     return 1
+}
+
+update_vhost_fastcgi_cache() {
+    local domain=$1
+    local conf="/etc/nginx/sites-available/${domain}.conf"
+    if [[ ! -f "$conf" ]]; then
+        log_warn "Nginx vhost not found for $domain"
+        return 1
+    fi
+
+    local tmp="${conf}.tmp"
+    cp "$conf" "$tmp" 2>/dev/null || return 1
+
+    sed -i \
+        -e 's/fastcgi_cache_bypass \$skip_cache \$skip_cache_method \$skip_cache_uri;/fastcgi_cache_bypass \$skip_cache_request;/' \
+        -e 's/fastcgi_no_cache \$skip_cache \$skip_cache_method \$skip_cache_uri;/fastcgi_no_cache \$skip_cache_request \$upstream_http_set_cookie;/' \
+        -e 's/add_header X-FastCGI-Cache \$upstream_cache_status;/add_header X-FastCGI-Cache \$upstream_cache_status always;/' \
+        -e 's/fastcgi_cache_key "\$scheme\$purge_method\$host\$request_uri";/fastcgi_cache_key "\$scheme\$host\$request_uri";/' \
+        -e 's/fastcgi_cache_key "\$scheme\$purge_method\$host\$1\$is_args\$args";/fastcgi_cache_key "\$scheme\$host\$1\$is_args\$args";/' \
+        -e '/set \$purge_method GET;/d' \
+        -e '/set \$purge_method \$request_method;/d' \
+        -e '/if (\$request_method = PURGE) { set \$purge_method GET; }/d' \
+        "$tmp" 2>/dev/null || true
+
+    sed -i -E \
+        -e "s|fastcgi_cache_valid 200 301 302 [^;]+;|fastcgi_cache_valid 200 301 302 ${FASTCGI_CACHE_TTL};|" \
+        -e "s|fastcgi_cache_valid 404 [^;]+;|fastcgi_cache_valid 404 ${FASTCGI_CACHE_TTL_404};|" \
+        "$tmp" 2>/dev/null || true
+
+    if ! grep -q 'fastcgi_cache_methods GET HEAD;' "$tmp"; then
+        sed -i '/fastcgi_cache wordpress_cache;/a\        fastcgi_cache_methods GET HEAD;' "$tmp" 2>/dev/null || true
+    fi
+
+    if cmp -s "$conf" "$tmp"; then
+        rm -f "$tmp"
+        return 0
+    fi
+
+    mv "$tmp" "$conf"
+    log_info "Updated FastCGI cache directives for $domain"
+    return 0
 }
 
 upgrade_existing_sites() {
@@ -5348,6 +6387,12 @@ upgrade_existing_sites() {
         return 1
     fi
 
+    write_nginx_dynamic_module_conf
+    if ! validate_nginx_config_or_recover_modules "Nginx configuration is already invalid; aborting upgrade"; then
+        return 1
+    fi
+
+    write_microcache_config
     write_nginx_image_optimization_map
     write_nginx_image_optimization_snippet
 
@@ -5361,6 +6406,7 @@ upgrade_existing_sites() {
     local domain
     for domain in $domains; do
         [[ -z "$domain" ]] && continue
+        update_vhost_fastcgi_cache "$domain" || true
         update_vhost_image_optimization "$domain" || true
 
         local cdn_enabled
@@ -5374,12 +6420,11 @@ upgrade_existing_sites() {
         fi
     done
 
-    if nginx -t >/dev/null 2>&1; then
+    if validate_nginx_config_or_recover_modules "Nginx configuration invalid after upgrade; review vhosts"; then
         systemctl reload nginx >/dev/null 2>&1 || true
         log_success "Existing sites upgraded"
         return 0
     fi
-    log_warn "Nginx configuration invalid after upgrade; review vhosts"
     return 1
 }
 
@@ -5412,7 +6457,7 @@ enable_ssl_for_site() {
     log_info "Requesting SSL certificate for $domain..."
     if certbot --nginx "${cert_domains[@]}" \
         --agree-tos --no-eff-email --redirect -m "$email" --non-interactive >/dev/null 2>&1; then
-        if [[ "$ENABLE_HTTP3_FORCE_ALL" == "true" ]]; then
+        if [[ "$ENABLE_HTTP2_FORCE_ALL" == "true" || "$ENABLE_HTTP3_FORCE_ALL" == "true" ]]; then
             enable_http3_for_all_ssl_vhosts || true
         else
             maybe_enable_http3_for_site "$domain"
@@ -5544,14 +6589,14 @@ create_site() {
         execute_rollback
         return 1
     fi
-    push_rollback "mysql -e \"DROP DATABASE IF EXISTS \\\`$db_name\\\`;\" 2>/dev/null || true"
+    push_rollback "mysql_exec \"DROP DATABASE IF EXISTS \\\`$db_name\\\`;\" 2>/dev/null || true"
     
     # Create MySQL user with limited privileges
     log_info "Creating MySQL user..."
     mysql_exec "CREATE USER IF NOT EXISTS '$db_user'@'localhost' IDENTIFIED BY '$db_pass';" 2>/dev/null || true
     mysql_exec "GRANT ALL PRIVILEGES ON \`$db_name\`.* TO '$db_user'@'localhost';" 2>/dev/null
     mysql_exec "FLUSH PRIVILEGES;" 2>/dev/null
-    push_rollback "mysql -e \"DROP USER IF EXISTS '$db_user'@'localhost';\" 2>/dev/null || true"
+    push_rollback "mysql_exec \"DROP USER IF EXISTS '$db_user'@'localhost';\" 2>/dev/null || true"
     
     # Create site directory structure
     log_info "Creating site directories..."
@@ -5668,8 +6713,12 @@ create_site() {
 
     # Nginx Helper integration (cache purge)
     if [[ "$ENABLE_NGINX_HELPER" == "true" ]]; then
-        run_wp_cli "$wp_path" plugin install nginx-helper --activate || log_warn "Failed to install Nginx Helper"
-        run_wp_cli "$wp_path" config set RT_WP_NGINX_HELPER_CACHE_PATH "$CACHE_DIR" || log_warn "Failed to set Nginx Helper cache path"
+        if [[ "$CACHE_PURGE_AVAILABLE" == "true" ]]; then
+            run_wp_cli "$wp_path" plugin install nginx-helper --activate || log_warn "Failed to install Nginx Helper"
+            run_wp_cli "$wp_path" config set RT_WP_NGINX_HELPER_CACHE_PATH "$CACHE_DIR" || log_warn "Failed to set Nginx Helper cache path"
+        else
+            log_warn "Skipping Nginx Helper for $domain because cache purge module is not available"
+        fi
     fi
 
     if [[ "$ENABLE_CDN" == "true" ]]; then
@@ -5681,6 +6730,7 @@ create_site() {
     
     # Create Nginx vhost with secure defaults
     log_info "Creating Nginx configuration..."
+    write_microcache_config
     write_nginx_image_optimization_map
     write_nginx_image_optimization_snippet
     local server_names="$domain"
@@ -5705,19 +6755,16 @@ create_site() {
     location @purge {
 $allow_lines
         deny all;
-        set \$purge_method GET;
         fastcgi_cache_purge 1;
-        fastcgi_cache_key "\$scheme\$purge_method\$host\$request_uri";
+        fastcgi_cache_key "\$scheme\$host\$request_uri";
         return 204;
     }
 
     location ~ /purge(/.*) {
 $allow_lines
         deny all;
-        set \$purge_method \$request_method;
-        if (\$request_method = PURGE) { set \$purge_method GET; }
         fastcgi_cache_purge 1;
-        fastcgi_cache_key "\$scheme\$purge_method\$host\$1\$is_args\$args";
+        fastcgi_cache_key "\$scheme\$host\$1\$is_args\$args";
         return 204;
     }
 EOF
@@ -5788,11 +6835,12 @@ server {
         
         # FastCGI cache
         fastcgi_cache wordpress_cache;
-        fastcgi_cache_bypass \$skip_cache \$skip_cache_method \$skip_cache_uri;
-        fastcgi_no_cache \$skip_cache \$skip_cache_method \$skip_cache_uri;
-        fastcgi_cache_valid 200 301 302 60m;
-        fastcgi_cache_valid 404 10m;
-        add_header X-FastCGI-Cache \$upstream_cache_status;
+        fastcgi_cache_methods GET HEAD;
+        fastcgi_cache_bypass \$skip_cache_request;
+        fastcgi_no_cache \$skip_cache_request \$upstream_http_set_cookie;
+        fastcgi_cache_valid 200 301 302 $FASTCGI_CACHE_TTL;
+        fastcgi_cache_valid 404 $FASTCGI_CACHE_TTL_404;
+        add_header X-FastCGI-Cache \$upstream_cache_status always;
     }
 
     # Static files caching
@@ -5816,8 +6864,7 @@ NGINX_VHOST
     ln -sf "/etc/nginx/sites-available/$domain.conf" "/etc/nginx/sites-enabled/$domain.conf"
     
     # Test Nginx configuration
-    if ! nginx -t 2>/dev/null; then
-        log_error "Nginx configuration test failed"
+    if ! validate_nginx_config_or_recover_modules "Nginx configuration test failed"; then
         execute_rollback
         return 1
     fi
@@ -5938,6 +6985,7 @@ delete_site() {
     }
     
     detect_php_version || return 1
+    detect_mysql_socket >/dev/null 2>&1 || true
     
     log_section "Deleting WordPress Site: $domain"
     set_log_context "DELETE_SITE" "$domain"
@@ -5972,7 +7020,7 @@ delete_site() {
     # Create final backup before deletion
     log_info "Creating final backup..."
     local backup_file="$BACKUP_DIR/${db_name}-deletion-$(date +%s).sql.gz"
-    if mysqldump --single-transaction "$db_name" 2>/dev/null | gzip > "$backup_file" 2>/dev/null; then
+    if mysqldump_exec "$db_name" 2>/dev/null | gzip > "$backup_file" 2>/dev/null; then
         if [[ -f "$BACKUP_KEY_FILE" ]]; then
             openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
                 -in "$backup_file" \
@@ -6009,10 +7057,8 @@ delete_site() {
     rm -f "/etc/nginx/sites-available/$domain.conf"
     rm -f "/etc/nginx/sites-enabled/$domain.conf"
     
-    if nginx -t 2>/dev/null; then
+    if validate_nginx_config_or_recover_modules "Nginx configuration invalid after site removal"; then
         systemctl reload nginx || log_warn "Failed to reload Nginx"
-    else
-        log_error "Nginx configuration invalid after site removal"
     fi
     
     # Remove site files
@@ -6163,8 +7209,19 @@ COMMANDS:
   nginx-auto-update --enable|--disable|--run|--status
                               Periodically rebuild Nginx from latest stable (cron)
   enable-http3-all            Patch all SSL vhosts to enable HTTP/3
+  protocol-check [domain|--all]
+                              Deep protocol readiness check (config + local runtime probes)
+  protocol-enforce [domain|--all]
+                              Enforce HTTP/2 + HTTP/3/QUIC directives for one/all SSL vhosts
   remove-old-backups [days]   Remove backups older than N days (default: auto)
   compression-status          Show gzip/brotli/zstd enablement and levels
+  cache-status [domain|--all]
+                              Show FastCGI cache HIT/MISS/BYPASS health per site
+  cache-deep-check [domain|--all]
+                              Deep-check cache behavior (anonymous/query/cookie probes)
+  cache-purge-check           Verify source build state + cache purge module wiring
+  compression-optimize [auto|balanced|aggressive|low-cpu]
+                              Optimize compression levels and reload Nginx
   factory-reset [--force]     Remove stack, data, and configs (DANGEROUS)
   refresh-installation [--force]  Reinstall stack and reset to defaults
   list-features               Show full feature list
@@ -6221,6 +7278,22 @@ EXAMPLES:
   # Show compression status
   sudo bash $0 compression-status
 
+  # Show FastCGI cache status for all sites
+  sudo bash $0 cache-status --all
+
+  # Run deep cache diagnostics for one site
+  sudo bash $0 cache-deep-check example.com
+
+  # Verify cache purge build/module/loader readiness
+  sudo bash $0 cache-purge-check
+
+  # Deep protocol audit and enforcement
+  sudo bash $0 protocol-check --all
+  sudo bash $0 protocol-enforce --all
+
+  # Optimize compression profile
+  sudo bash $0 compression-optimize auto
+
   # Factory reset (DANGEROUS)
   sudo bash $0 factory-reset
 
@@ -6258,6 +7331,7 @@ IMPORTANT LOCATIONS:
   - Cloudflare guide: $CONFIG_DIR/cloudflare-recommended.txt
 
 TUNABLES (env):
+  - ENABLE_HTTP2_FORCE_ALL=true|false   # Enforce HTTP/2 on all SSL vhosts
   - ENABLE_HTTP3_FORCE_ALL=true|false   # Patch all SSL vhosts after cert issuance
   - ENABLE_HTTP3_HQ=true|false          # Enable HTTP/3 HQ mode + Alt-Svc
   - ENABLE_QUIC_TUNING=true|false       # QUIC tuning (quic_retry/quic_gso)
@@ -6265,6 +7339,12 @@ TUNABLES (env):
   - ENABLE_TLS_EARLY_DATA=true|false    # TLS 1.3 0-RTT (use with care)
   - ENABLE_VISIBILITY_ENDPOINTS=true|false
   - VISIBILITY_PORT=8080
+  - FASTCGI_CACHE_TTL=60s|120s
+  - FASTCGI_SKIP_QUERY_STRING=true|false
+  - FASTCGI_CACHE_BYPASS_AUTHORIZATION=true|false
+  - GZIP_COMP_LEVEL=1..9
+  - BROTLI_COMP_LEVEL=0..11
+  - ZSTD_COMP_LEVEL=1..19
 
 SUPPORT:
   - Author: $INSTALLER_AUTHOR
@@ -6292,7 +7372,7 @@ Full Feature List:
   - OpenSSL QUIC source selection (official/quictls) for HTTP/3 builds
   - Nginx auto-update (latest stable via cron; default on for source builds)
   - Brotli + zstd + gzip compression when modules are available
-  - Accept-Encoding aware cache keys (zstd > br > gzip)
+  - Cache-safe FastCGI keys with bypass maps (cookies/query/auth/cache-control)
   - Optional QUIC tuning + HTTP/3 HQ mode
   - Optional HTTP/3 auto-patch for all SSL vhosts
   - Optional CDN integration (per-site enable/disable, provider-agnostic)
@@ -6309,6 +7389,9 @@ Full Feature List:
   - Encrypted nightly backups with verification
   - Automatic log rotation and cleanup
   - Maintenance: remove old backups + compression status reporting
+  - Cache status, deep diagnostics, and cache purge readiness checks
+  - Deep protocol readiness + enforcement commands (protocol-check/protocol-enforce)
+  - Compression profile optimizer (auto|balanced|aggressive|low-cpu)
   - Maintenance: factory reset or refresh reinstall (destructive)
   - Local visibility endpoints (health/status/protocol)
   - UFW + fail2ban protection (preserve existing rules)
@@ -6471,16 +7554,17 @@ run_full_install() {
     phase_redis
     phase_php_pools_base
     phase_registries
-    phase_idempotency_lock
     phase_nginx_microcache
     phase_wordpress_cron
     phase_logrotate
     phase_automated_backups
     phase_security_hardening
     phase_system_cleanup
-    phase_health_check || {
-        log_warn "Health check identified issues - review logs"
-    }
+    if ! phase_health_check; then
+        log_error "Health check failed; installation marked incomplete"
+        return 1
+    fi
+    phase_idempotency_lock
     phase_summary
 }
 
@@ -6750,6 +7834,480 @@ show_compression_status() {
     echo "gzip:   $gzip_enabled (level: $gzip_level)"
     echo "brotli: $brotli_enabled (level: $brotli_level, module: $brotli_module)"
     echo "zstd:   $zstd_enabled (level: $zstd_level, module: $zstd_module)"
+}
+
+get_registered_domains() {
+    if [[ ! -f "$REGISTRY_FILE" ]]; then
+        return 1
+    fi
+    jq -r '.domains | keys[]' "$REGISTRY_FILE" 2>/dev/null || true
+}
+
+resolve_site_probe_url() {
+    local domain=$1
+    local alt_host=""
+    local effective_url=""
+
+    if [[ "$domain" =~ ^www\. ]]; then
+        alt_host="${domain#www.}"
+    else
+        alt_host="www.$domain"
+    fi
+
+    # Prefer probing local origin directly to avoid CDN/edge cache skew.
+    effective_url=$(curl -ksS -L -o /dev/null --max-time 15 \
+        --resolve "${domain}:443:127.0.0.1" \
+        --resolve "${domain}:80:127.0.0.1" \
+        --resolve "${alt_host}:443:127.0.0.1" \
+        --resolve "${alt_host}:80:127.0.0.1" \
+        -w '%{url_effective}' "https://$domain/" 2>/dev/null || true)
+    if [[ "$effective_url" =~ ^https?:// ]]; then
+        echo "$effective_url"
+        return 0
+    fi
+
+    effective_url=$(curl -sS -L -o /dev/null --max-time 15 \
+        --resolve "${domain}:443:127.0.0.1" \
+        --resolve "${domain}:80:127.0.0.1" \
+        --resolve "${alt_host}:443:127.0.0.1" \
+        --resolve "${alt_host}:80:127.0.0.1" \
+        -w '%{url_effective}' "http://$domain/" 2>/dev/null || true)
+    if [[ "$effective_url" =~ ^https?:// ]]; then
+        echo "$effective_url"
+        return 0
+    fi
+
+    # Fallback to normal DNS path when local-origin probe is unavailable.
+    effective_url=$(curl -ksS -L -o /dev/null --max-time 15 \
+        -w '%{url_effective}' "https://$domain/" 2>/dev/null || true)
+    if [[ "$effective_url" =~ ^https?:// ]]; then
+        echo "$effective_url"
+        return 0
+    fi
+
+    effective_url=$(curl -sS -L -o /dev/null --max-time 15 \
+        -w '%{url_effective}' "http://$domain/" 2>/dev/null || true)
+    if [[ "$effective_url" =~ ^https?:// ]]; then
+        echo "$effective_url"
+        return 0
+    fi
+
+    return 1
+}
+
+probe_fastcgi_cache_header() {
+    local url=$1
+    local cookie=${2:-}
+    local output=""
+    local header=""
+    local host=""
+    local alt_host=""
+
+    host=$(echo "$url" | awk -F/ '{print $3}' | cut -d: -f1)
+    if [[ "$host" =~ ^www\. ]]; then
+        alt_host="${host#www.}"
+    else
+        alt_host="www.$host"
+    fi
+
+    if [[ -n "$cookie" ]]; then
+        output=$(curl -ksSI -L --max-time 15 \
+            --resolve "${host}:443:127.0.0.1" \
+            --resolve "${host}:80:127.0.0.1" \
+            --resolve "${alt_host}:443:127.0.0.1" \
+            --resolve "${alt_host}:80:127.0.0.1" \
+            -H "Cookie: $cookie" "$url" 2>/dev/null || true)
+    else
+        output=$(curl -ksSI -L --max-time 15 \
+            --resolve "${host}:443:127.0.0.1" \
+            --resolve "${host}:80:127.0.0.1" \
+            --resolve "${alt_host}:443:127.0.0.1" \
+            --resolve "${alt_host}:80:127.0.0.1" \
+            "$url" 2>/dev/null || true)
+    fi
+
+    header=$(echo "$output" | tr -d '\r' | awk -F': ' '
+        tolower($1) == "x-fastcgi-cache" {
+            value=toupper($2)
+            gsub(/[[:space:]]+/, "", value)
+            last=value
+        }
+        END {
+            if (last == "") {
+                print "NONE"
+            } else {
+                print last
+            }
+        }
+    ')
+    [[ -z "$header" ]] && header="NONE"
+    echo "$header"
+}
+
+is_fastcgi_cache_active_status() {
+    local status=${1:-}
+    case "$status" in
+        HIT|STALE|UPDATING|REVALIDATED|EXPIRED)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+cache_status_for_site() {
+    local domain_raw=$1
+    local domain=""
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    local conf="/etc/nginx/sites-available/${domain}.conf"
+    local has_cache="no"
+    local has_methods="no"
+    local has_bypass="no"
+    local has_no_cache="no"
+    local base_url=""
+    local probe1="NONE"
+    local probe2="NONE"
+    local probe3="NONE"
+    local health="WARN"
+
+    if [[ -f "$conf" ]]; then
+        grep -q 'fastcgi_cache wordpress_cache;' "$conf" 2>/dev/null && has_cache="yes"
+        grep -q 'fastcgi_cache_methods GET HEAD;' "$conf" 2>/dev/null && has_methods="yes"
+        grep -q 'fastcgi_cache_bypass \$skip_cache_request;' "$conf" 2>/dev/null && has_bypass="yes"
+        grep -q 'fastcgi_no_cache \$skip_cache_request \$upstream_http_set_cookie;' "$conf" 2>/dev/null && has_no_cache="yes"
+    fi
+
+    base_url=$(resolve_site_probe_url "$domain" 2>/dev/null || true)
+    if [[ -n "$base_url" ]]; then
+        probe1=$(probe_fastcgi_cache_header "$base_url")
+        sleep 1
+        probe2=$(probe_fastcgi_cache_header "$base_url")
+        sleep 1
+        probe3=$(probe_fastcgi_cache_header "$base_url")
+    fi
+
+    if is_fastcgi_cache_active_status "$probe2" || is_fastcgi_cache_active_status "$probe3"; then
+        health="OK"
+    elif [[ "$probe1" == "BYPASS" && "$probe2" == "BYPASS" ]]; then
+        health="BYPASS"
+    elif [[ "$probe1" == "MISS" && "$probe2" == "MISS" && "$probe3" == "MISS" ]]; then
+        health="MISS"
+    elif [[ "$probe1" == "NONE" && "$probe2" == "NONE" ]]; then
+        health="NOHDR"
+    fi
+
+    echo "Domain: $domain"
+    echo "  Vhost cache directives: cache=$has_cache methods=$has_methods bypass=$has_bypass no_cache=$has_no_cache"
+    if [[ -n "$base_url" ]]; then
+        echo "  Probe URL: $base_url"
+        echo "  FastCGI cache probe: #1=$probe1 #2=$probe2 #3=$probe3"
+    else
+        echo "  Probe URL: unreachable"
+        echo "  FastCGI cache probe: skipped"
+    fi
+    echo "  Health: $health"
+    echo ""
+
+    if [[ "$health" == "OK" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+cache_status_report() {
+    log_section "FastCGI Cache Status"
+    set_log_context "CACHE" "STATUS"
+
+    require_initialized || return 1
+
+    local target=${1:---all}
+    local domains=""
+    local domain=""
+    local failed=0
+    local total=0
+
+    if [[ "$target" == "--all" || -z "$target" ]]; then
+        domains=$(get_registered_domains)
+    else
+        domain=$(validate_domain "$target") || return 1
+        domains="$domain"
+    fi
+
+    if [[ -z "$domains" ]]; then
+        log_warn "No registered sites found for cache status"
+        return 1
+    fi
+
+    while IFS= read -r domain; do
+        [[ -z "$domain" ]] && continue
+        ((++total))
+        if ! cache_status_for_site "$domain"; then
+            ((++failed))
+        fi
+    done <<< "$domains"
+
+    echo "Summary: $((total - failed))/$total site(s) showing cache activity (HIT/STALE/UPDATING/REVALIDATED/EXPIRED)"
+    if [[ $failed -gt 0 ]]; then
+        return 1
+    fi
+    return 0
+}
+
+cache_deep_check_site() {
+    local domain_raw=$1
+    local domain=""
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    local base_url=""
+    local anonymous1="NONE"
+    local anonymous2="NONE"
+    local query_probe="NONE"
+    local cookie_probe="NONE"
+    local query_expected="CACHEABLE"
+    local query_ok="true"
+    local cookie_ok="true"
+    local anonymous_ok="false"
+    local health="OK"
+
+    base_url=$(resolve_site_probe_url "$domain" 2>/dev/null || true)
+    if [[ -z "$base_url" ]]; then
+        echo "Domain: $domain"
+        echo "  Probe URL: unreachable"
+        echo "  Deep checks: skipped"
+        echo ""
+        return 1
+    fi
+
+    anonymous1=$(probe_fastcgi_cache_header "$base_url")
+    sleep 1
+    anonymous2=$(probe_fastcgi_cache_header "$base_url")
+    query_probe=$(probe_fastcgi_cache_header "${base_url}?dazestack_cache_probe=1")
+    cookie_probe=$(probe_fastcgi_cache_header "$base_url" "wordpress_logged_in=1; wordpress_sec=1; wp_woocommerce_session_=1; woocommerce_items_in_cart=1; woocommerce_cart_hash=1")
+
+    if is_fastcgi_cache_active_status "$anonymous1" || is_fastcgi_cache_active_status "$anonymous2"; then
+        anonymous_ok="true"
+    fi
+
+    if [[ "$FASTCGI_SKIP_QUERY_STRING" == "true" ]]; then
+        query_expected="BYPASS"
+        [[ "$query_probe" == "BYPASS" ]] || query_ok="false"
+    else
+        query_expected="CACHEABLE"
+        if [[ "$query_probe" == "BYPASS" || "$query_probe" == "NONE" ]]; then
+            query_ok="false"
+        fi
+    fi
+
+    [[ "$cookie_probe" == "BYPASS" ]] || cookie_ok="false"
+
+    if [[ "$anonymous_ok" != "true" ]]; then
+        health="WARN_ANON"
+    elif [[ "$query_ok" != "true" ]]; then
+        health="WARN_QUERY"
+    elif [[ "$cookie_ok" != "true" ]]; then
+        health="WARN_COOKIE"
+    fi
+
+    echo "Domain: $domain"
+    echo "  Probe URL: $base_url"
+    echo "  Anonymous: #1=$anonymous1 #2=$anonymous2"
+    echo "  Query-string request: $query_probe (expected $query_expected)"
+    echo "  Logged-in cookie request: $cookie_probe (expected BYPASS)"
+    echo "  Deep-check health: $health"
+    echo ""
+
+    [[ "$health" == "OK" ]]
+}
+
+cache_deep_check() {
+    log_section "FastCGI Cache Deep Diagnostics"
+    set_log_context "CACHE" "DEEP"
+
+    require_initialized || return 1
+
+    local target=${1:---all}
+    local domains=""
+    local domain=""
+    local failed=0
+    local total=0
+    local cache_conf="/etc/nginx/conf.d/10-cache-zones.conf"
+
+    if [[ "$target" == "--all" || -z "$target" ]]; then
+        domains=$(get_registered_domains)
+    else
+        domain=$(validate_domain "$target") || return 1
+        domains="$domain"
+    fi
+
+    echo "Global cache configuration:"
+    if [[ -f "$cache_conf" ]]; then
+        grep -E 'fastcgi_cache_path|keys_zone|fastcgi_cache_key|fastcgi_cache_background_update|fastcgi_cache_revalidate' "$cache_conf" 2>/dev/null | sed 's/^/  /'
+    else
+        echo "  Missing: $cache_conf"
+    fi
+    if [[ -d "$CACHE_DIR" ]]; then
+        echo "  Cache directory size: $(du -sh "$CACHE_DIR" 2>/dev/null | awk '{print $1}')"
+    else
+        echo "  Cache directory missing: $CACHE_DIR"
+    fi
+    detect_cache_purge_support
+    echo "  Cache purge module available: $CACHE_PURGE_AVAILABLE"
+    echo ""
+
+    if [[ -z "$domains" ]]; then
+        log_warn "No registered sites found for deep cache check"
+        return 1
+    fi
+
+    while IFS= read -r domain; do
+        [[ -z "$domain" ]] && continue
+        ((++total))
+        if ! cache_deep_check_site "$domain"; then
+            ((++failed))
+        fi
+    done <<< "$domains"
+
+    echo "Deep check summary: $((total - failed))/$total site(s) passed strict checks (anonymous cache-active + expected query/cookie behavior)"
+    if [[ $failed -gt 0 ]]; then
+        return 1
+    fi
+    return 0
+}
+
+cache_purge_check() {
+    log_section "Cache Purge Readiness Check"
+    set_log_context "CACHE" "PURGE-CHECK"
+
+    local state_file="$NGINX_BUILD_STATE_FILE"
+    local module_name="ngx_http_cache_purge_module.so"
+    local build_type="unknown"
+    local last_build_status="unknown"
+    local module_path=""
+    local loader_conf=""
+    local loader_exists="false"
+    local cache_purge_available="false"
+
+    if command -v jq >/dev/null 2>&1 && [[ -f "$state_file" ]]; then
+        build_type=$(jq -r '.build_type // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
+        last_build_status=$(jq -r '.last_build_status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
+    fi
+
+    module_path=$(find_nginx_module_file "$module_name" 2>/dev/null || true)
+
+    if compgen -G "/etc/nginx/modules-enabled/*.conf" >/dev/null 2>&1; then
+        loader_conf=$(grep -Rsl -- "$module_name" /etc/nginx/modules-enabled/*.conf 2>/dev/null | head -1 || true)
+    fi
+    if [[ -n "$loader_conf" && -f "$loader_conf" ]]; then
+        loader_exists="true"
+    fi
+
+    if nginx_module_enabled "cache_purge" \
+        || nginx_module_enabled "cache-purge" \
+        || nginx_module_enabled "ngx_cache_purge"; then
+        cache_purge_available="true"
+    fi
+
+    echo "build state: \"build_type\": \"$build_type\" and \"last_build_status\": \"$last_build_status\""
+    echo "build state: \"build_type\": \"$build_type\""
+    echo "build state: \"last_build_status\": \"$last_build_status\""
+    echo "build flags: ENABLE_CACHE_PURGE_MODULE=${ENABLE_CACHE_PURGE_MODULE} REQUIRE_CACHE_PURGE_MODULE=${REQUIRE_CACHE_PURGE_MODULE}"
+
+    if [[ -n "$module_path" ]]; then
+        echo "module file exists: $module_name (true)"
+        echo "module file path: $module_path"
+    else
+        echo "module file exists: $module_name (false)"
+    fi
+
+    if [[ "$loader_exists" == "true" ]]; then
+        echo "loader conf exists in modules-enabled: true"
+        echo "loader conf path: $loader_conf"
+    else
+        echo "loader conf exists in modules-enabled: false"
+    fi
+
+    echo "deep check prints Cache purge module available: $cache_purge_available"
+
+    if [[ "$build_type" == "source" && "$last_build_status" == "success" && -n "$module_path" && "$loader_exists" == "true" && "$cache_purge_available" == "true" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+optimize_compression_profile() {
+    local profile=${1:-auto}
+    log_section "Compression Optimization"
+    set_log_context "COMPRESSION" "OPTIMIZE"
+
+    local cpu_cores=0
+    local gzip_level=5
+    local brotli_level=5
+    local zstd_level=3
+
+    check_root
+    calculate_system_resources >/dev/null 2>&1 || true
+    detect_brotli_support
+    detect_zstd_support
+
+    cpu_cores=${SYSTEM_CPU_CORES:-0}
+    if [[ $cpu_cores -lt 1 ]]; then
+        cpu_cores=$(nproc 2>/dev/null || echo 1)
+    fi
+
+    case "$profile" in
+        low-cpu)
+            gzip_level=3
+            brotli_level=3
+            zstd_level=2
+            ;;
+        aggressive)
+            gzip_level=6
+            brotli_level=6
+            zstd_level=5
+            ;;
+        balanced)
+            gzip_level=5
+            brotli_level=5
+            zstd_level=3
+            ;;
+        auto)
+            if [[ $cpu_cores -le 2 ]]; then
+                gzip_level=4
+                brotli_level=4
+                zstd_level=2
+            elif [[ $cpu_cores -le 4 ]]; then
+                gzip_level=5
+                brotli_level=5
+                zstd_level=3
+            elif [[ $cpu_cores -le 8 ]]; then
+                gzip_level=5
+                brotli_level=6
+                zstd_level=4
+            else
+                gzip_level=6
+                brotli_level=6
+                zstd_level=4
+            fi
+            ;;
+        *)
+            log_error "Unknown compression profile: $profile (use auto|balanced|aggressive|low-cpu)"
+            return 1
+            ;;
+    esac
+
+    GZIP_COMP_LEVEL="$gzip_level"
+    BROTLI_COMP_LEVEL="$brotli_level"
+    ZSTD_COMP_LEVEL="$zstd_level"
+
+    log_info "Applying compression profile '$profile' (cpu_cores=$cpu_cores, gzip=$gzip_level, brotli=$brotli_level, zstd=$zstd_level)"
+    write_nginx_performance_snippet
+    if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after compression optimization"; then
+        return 1
+    fi
+    systemctl reload nginx >/dev/null 2>&1 || true
+    show_compression_status
+    log_success "Compression profile applied"
+    return 0
 }
 
 confirm_destructive_action() {
@@ -7044,6 +8602,9 @@ show_menu() {
     echo -e "${YELLOW}19${NC}) Optimize images (AVIF/WebP)"
     echo -e "${YELLOW}20${NC}) Upgrade existing sites (apply new features)"
     echo -e "${YELLOW}21${NC}) Nginx source build menu (advanced)"
+    echo -e "${YELLOW}22${NC}) Cache status (HIT/MISS per site)"
+    echo -e "${YELLOW}23${NC}) Deep cache diagnostics"
+    echo -e "${YELLOW}24${NC}) Optimize compression profile"
     echo -e "${YELLOW}0${NC}) Exit"
     echo ""
 }
@@ -7197,6 +8758,48 @@ menu_upgrade_existing_sites() {
     upgrade_existing_sites || true
 }
 
+menu_cache_status() {
+    require_initialized || return 1
+    local all_sites
+    all_sites=$(prompt_yes_no "Check cache status for ALL sites-" "y")
+    if [[ "$all_sites" == "true" ]]; then
+        cache_status_report --all || true
+    else
+        local domain
+        domain=$(prompt_input "Domain") || {
+            log_warn "Domain is required"
+            return 1
+        }
+        cache_status_report "$domain" || true
+    fi
+}
+
+menu_cache_deep_check() {
+    require_initialized || return 1
+    local all_sites
+    all_sites=$(prompt_yes_no "Run deep cache diagnostics for ALL sites-" "y")
+    if [[ "$all_sites" == "true" ]]; then
+        cache_deep_check --all || true
+    else
+        local domain
+        domain=$(prompt_input "Domain") || {
+            log_warn "Domain is required"
+            return 1
+        }
+        cache_deep_check "$domain" || true
+    fi
+}
+
+menu_compression_optimize() {
+    check_root
+    local profile
+    profile=$(prompt_input "Compression profile (auto/balanced/aggressive/low-cpu)" "auto") || {
+        log_warn "Profile is required"
+        return 1
+    }
+    optimize_compression_profile "$profile" || true
+}
+
 menu_nginx_source_build() {
     check_root
     local version
@@ -7250,6 +8853,9 @@ menu_nginx_source_build() {
     ENABLE_BROTLI="$enable_brotli"
     ENABLE_ZSTD="$enable_zstd"
     if build_nginx_from_source "$version"; then
+        if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after source build"; then
+            return 1
+        fi
         detect_http3_support
         detect_brotli_support
         detect_zstd_support
@@ -7266,11 +8872,19 @@ menu_nginx_source_build() {
         fi
         log_success "Nginx source build installed"
     else
+        if cache_purge_module_required; then
+            log_error "Source build failed while cache purge module is required; refusing package fallback"
+            return 1
+        fi
         log_warn "Source build failed; falling back to package install"
         ensure_ondrej_nginx_mainline || true
         safe_apt_install nginx || return 1
         install_nginx_optional_modules
         install_image_optimization_tools
+        write_nginx_dynamic_module_conf
+        if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after package fallback install"; then
+            return 1
+        fi
         detect_http3_support
         detect_brotli_support
         detect_zstd_support
@@ -7322,6 +8936,13 @@ menu_rebuild_nginx() {
     ENABLE_BROTLI="$NGINX_BUILD_BROTLI_REQUIRED"
     ENABLE_ZSTD="$NGINX_BUILD_ZSTD_REQUIRED"
     if build_nginx_from_source "$NGINX_SOURCE_VERSION"; then
+        if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after rebuild"; then
+            write_nginx_build_state "source" "$NGINX_SOURCE_VERSION" \
+                "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+                "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+                "failed" "rebuild produced invalid config"
+            return 1
+        fi
         detect_http3_support
         detect_brotli_support
         detect_zstd_support
@@ -7358,7 +8979,7 @@ menu_nginx_source_build_submenu() {
         echo -e "${YELLOW}1${NC}) Build Nginx from source (custom prompts)"
         echo -e "${YELLOW}2${NC}) Rebuild source-built Nginx"
         echo -e "${YELLOW}3${NC}) Show Nginx build state"
-        echo -e "${YELLOW}4${NC}) Enable HTTP/3 for all SSL vhosts"
+        echo -e "${YELLOW}4${NC}) Enforce HTTP/2+HTTP/3 for all SSL vhosts"
         echo -e "${YELLOW}5${NC}) Nginx auto-update (enable/disable)"
         echo -e "${YELLOW}0${NC}) Back"
         echo ""
@@ -7414,6 +9035,9 @@ menu_loop() {
             19) menu_optimize_images || true ;;
             20) menu_upgrade_existing_sites || true ;;
             21) menu_nginx_source_build_submenu || true ;;
+            22) menu_cache_status || true ;;
+            23) menu_cache_deep_check || true ;;
+            24) menu_compression_optimize || true ;;
             0|q|Q|exit) break ;;
             *) log_warn "Invalid selection" ;;
         esac
@@ -7676,6 +9300,9 @@ main() {
             ENABLE_NGINX_SOURCE_BUILD="true"
             NGINX_SOURCE_VERSION="$version"
             if build_nginx_from_source "$version"; then
+                if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after source build"; then
+                    exit 1
+                fi
                 detect_http3_support
                 detect_brotli_support
                 detect_zstd_support
@@ -7689,11 +9316,19 @@ main() {
                     enable_nginx_auto_update || true
                 fi
             else
+                if cache_purge_module_required; then
+                    log_error "Source build failed while cache purge module is required; refusing package fallback"
+                    exit 1
+                fi
                 log_warn "Source build failed; falling back to package install"
                 ensure_ondrej_nginx_mainline || true
                 safe_apt_install nginx || exit 1
                 install_nginx_optional_modules
                 install_image_optimization_tools
+                write_nginx_dynamic_module_conf
+                if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after package fallback install"; then
+                    exit 1
+                fi
                 detect_http3_support
                 detect_brotli_support
                 detect_zstd_support
@@ -7725,6 +9360,20 @@ main() {
             enable_http3_for_all_ssl_vhosts
             ;;
 
+        protocol-check)
+            check_root
+            if ! protocol_readiness_check "${2:---all}"; then
+                exit 1
+            fi
+            ;;
+
+        protocol-enforce)
+            check_root
+            if ! protocol_enforce "${2:---all}"; then
+                exit 1
+            fi
+            ;;
+
         rebuild-nginx)
             check_root
             load_nginx_build_state || {
@@ -7745,6 +9394,13 @@ main() {
             ENABLE_BROTLI="$NGINX_BUILD_BROTLI_REQUIRED"
             ENABLE_ZSTD="$NGINX_BUILD_ZSTD_REQUIRED"
             if build_nginx_from_source "$NGINX_SOURCE_VERSION"; then
+                if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after rebuild"; then
+                    write_nginx_build_state "source" "$NGINX_SOURCE_VERSION" \
+                        "$ENABLE_HTTP3" "$ENABLE_BROTLI" "$ENABLE_ZSTD" \
+                        "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
+                        "failed" "rebuild produced invalid config"
+                    exit 1
+                fi
                 detect_http3_support
                 detect_brotli_support
                 detect_zstd_support
@@ -7769,6 +9425,37 @@ main() {
 
         compression-status)
             show_compression_status
+            ;;
+
+        cache-status)
+            [[ ! -f "$INITIALIZED_FLAG" ]] && {
+                log_error "System not initialized"
+                exit 1
+            }
+            if ! cache_status_report "${2:---all}"; then
+                exit 1
+            fi
+            ;;
+
+        cache-deep-check)
+            [[ ! -f "$INITIALIZED_FLAG" ]] && {
+                log_error "System not initialized"
+                exit 1
+            }
+            if ! cache_deep_check "${2:---all}"; then
+                exit 1
+            fi
+            ;;
+
+        cache-purge-check)
+            if ! cache_purge_check; then
+                exit 1
+            fi
+            ;;
+
+        compression-optimize)
+            check_root
+            optimize_compression_profile "${2:-auto}"
             ;;
 
         factory-reset)

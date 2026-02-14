@@ -1,4 +1,4 @@
-# Commercial License (DazeStack WP)
+﻿# Commercial License (DazeStack WP)
 
 This document outlines the commercial licensing path for DazeStack WP.
 

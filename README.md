@@ -1,4 +1,4 @@
-# DazeStack WP
+﻿# DazeStack WP
 
 <p align="center">
   <strong>Laze while your WordPress stack builds itself.</strong>
