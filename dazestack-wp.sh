@@ -150,6 +150,11 @@ NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLBACK=${NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLB
 NGINX_QUIC_OPENSSL_REF_QUIC_FALLBACK=${NGINX_QUIC_OPENSSL_REF_QUIC_FALLBACK:-"openssl-3.0.2-quic1"}
 NGINX_QUIC_OPENSSL_REPO=${NGINX_QUIC_OPENSSL_REPO:-""}
 NGINX_QUIC_OPENSSL_REF=${NGINX_QUIC_OPENSSL_REF:-""}
+ENSURE_HTTP3_CURL=${ENSURE_HTTP3_CURL:-true}
+CURL_HTTP3_VERSION=${CURL_HTTP3_VERSION:-"8.18.0"}
+CURL_HTTP3_NGHTTP3_VERSION=${CURL_HTTP3_NGHTTP3_VERSION:-"v1.5.0"}
+CURL_HTTP3_NGTCP2_VERSION=${CURL_HTTP3_NGTCP2_VERSION:-"v1.5.0"}
+CURL_HTTP3_BUILD_ROOT=${CURL_HTTP3_BUILD_ROOT:-"${NGINX_SOURCE_BUILD_ROOT}/curl-http3"}
 CLI_WRAPPER="/usr/local/sbin/dazestack-wp"
 
 # PHP packages that may be merged/built-in (avoid hard failure if absent)
@@ -2381,6 +2386,129 @@ detect_http3_support() {
     fi
 }
 
+curl_has_http3_support() {
+    if ! command -v curl >/dev/null 2>&1; then
+        return 1
+    fi
+    curl -V 2>/dev/null | grep -qE '(^|[[:space:]])HTTP3([[:space:]]|$)'
+}
+
+ensure_http3_capable_curl() {
+    if [[ "$ENABLE_HTTP3" != "true" || "$ENSURE_HTTP3_CURL" != "true" ]]; then
+        return 0
+    fi
+
+    if curl_has_http3_support; then
+        log_success "curl already supports HTTP/3"
+        return 0
+    fi
+
+    log_warn "curl lacks HTTP/3; attempting source build fallback"
+
+    local build_packages=(
+        build-essential autoconf automake libtool pkg-config
+        cmake ninja-build gettext autopoint texinfo gperf bison flex
+        git wget ca-certificates
+        libev-dev libgnutls28-dev libnghttp2-dev
+        libbrotli-dev libzstd-dev libidn2-dev libpsl-dev libssh-dev zlib1g-dev
+    )
+    safe_apt_install "${build_packages[@]}" || {
+        log_warn "Failed to install curl HTTP/3 build dependencies"
+        return 1
+    }
+
+    local build_root="$CURL_HTTP3_BUILD_ROOT"
+    mkdir -p "$build_root"
+
+    local jobs=1
+    jobs=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+
+    local nghttp3_dir="$build_root/nghttp3"
+    local ngtcp2_dir="$build_root/ngtcp2"
+    local curl_dir="$build_root/curl-${CURL_HTTP3_VERSION}"
+    local curl_tar="$build_root/curl-${CURL_HTTP3_VERSION}.tar.xz"
+
+    rm -rf "$nghttp3_dir" "$ngtcp2_dir" "$curl_dir" "$curl_tar"
+
+    git clone --recursive --depth 1 --branch "$CURL_HTTP3_NGHTTP3_VERSION" \
+        https://github.com/ngtcp2/nghttp3.git "$nghttp3_dir" >/dev/null 2>&1 || {
+        log_warn "Failed to clone nghttp3 ($CURL_HTTP3_NGHTTP3_VERSION)"
+        return 1
+    }
+    cmake -S "$nghttp3_dir" -B "$nghttp3_dir/build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_LIB_ONLY=ON \
+        -DCMAKE_INSTALL_PREFIX=/usr/local >/dev/null 2>&1 || {
+        log_warn "Failed to configure nghttp3"
+        return 1
+    }
+    cmake --build "$nghttp3_dir/build" >/dev/null 2>&1 || {
+        log_warn "Failed to build nghttp3"
+        return 1
+    }
+    cmake --install "$nghttp3_dir/build" >/dev/null 2>&1 || {
+        log_warn "Failed to install nghttp3"
+        return 1
+    }
+
+    git clone --recursive --depth 1 --branch "$CURL_HTTP3_NGTCP2_VERSION" \
+        https://github.com/ngtcp2/ngtcp2.git "$ngtcp2_dir" >/dev/null 2>&1 || {
+        log_warn "Failed to clone ngtcp2 ($CURL_HTTP3_NGTCP2_VERSION)"
+        return 1
+    }
+    (cd "$ngtcp2_dir" && autoreconf -fi >/dev/null 2>&1 \
+        && PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ./configure \
+            --prefix=/usr/local --enable-lib-only --with-gnutls >/dev/null 2>&1 \
+        && make -j"$jobs" >/dev/null 2>&1 \
+        && make install >/dev/null 2>&1) || {
+        log_warn "Failed to build/install ngtcp2"
+        return 1
+    }
+
+    wget -q -O "$curl_tar" "https://curl.se/download/curl-${CURL_HTTP3_VERSION}.tar.xz" || {
+        log_warn "Failed to download curl ${CURL_HTTP3_VERSION}"
+        return 1
+    }
+    tar -xf "$curl_tar" -C "$build_root" || {
+        log_warn "Failed to extract curl ${CURL_HTTP3_VERSION}"
+        return 1
+    }
+
+    (cd "$curl_dir" \
+        && PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ./configure \
+            --prefix=/usr/local \
+            --with-gnutls \
+            --with-nghttp2 \
+            --with-nghttp3 \
+            --with-ngtcp2 \
+            --with-zstd \
+            --with-brotli \
+            --with-libidn2 \
+            --with-libpsl \
+            --with-libssh \
+            --enable-alt-svc >/dev/null 2>&1 \
+        && make -j"$jobs" >/dev/null 2>&1 \
+        && make install >/dev/null 2>&1) || {
+        log_warn "Failed to build/install curl ${CURL_HTTP3_VERSION}"
+        return 1
+    }
+
+    ldconfig >/dev/null 2>&1 || true
+    hash -r
+
+    if [[ -x /usr/local/bin/curl ]]; then
+        export PATH="/usr/local/bin:$PATH"
+    fi
+
+    if curl_has_http3_support; then
+        log_success "curl HTTP/3 fallback build completed"
+        return 0
+    fi
+
+    log_warn "curl build completed but HTTP/3 still not detected"
+    return 1
+}
+
 detect_brotli_support() {
     BROTLI_AVAILABLE=false
     if [[ "$ENABLE_BROTLI" != "true" ]]; then
@@ -4514,6 +4642,10 @@ phase_system_prerequisites() {
         apt-transport-https lsb-release openssl \
         software-properties-common dnsutils \
         fail2ban ufw || exit 1
+
+    if [[ "$ENABLE_HTTP3" == "true" ]]; then
+        ensure_http3_capable_curl || log_warn "Proceeding without HTTP/3-capable curl"
+    fi
     
     log_success "System prerequisites installed"
     PHASE_CURRENT=1
@@ -5484,6 +5616,7 @@ phase_summary() {
     echo "  $SCRIPT_NAME enable-http3-all         # Enable HTTP/3 for all SSL vhosts"
     echo "  $SCRIPT_NAME protocol-check [domain|--all] # Deep protocol readiness check (H2/H3/QUIC)"
     echo "  $SCRIPT_NAME protocol-enforce [domain|--all] # Enforce modern protocol directives"
+    echo "  $SCRIPT_NAME ensure-http3-curl      # Build/install curl with HTTP/3 support"
     echo "  $SCRIPT_NAME upgrade-sites            # Apply new features to existing sites"
     echo "  $SCRIPT_NAME remove-old-backups [days] # Remove backups older than N days"
     echo "  $SCRIPT_NAME compression-status       # Show gzip/brotli/zstd status"
@@ -5654,7 +5787,7 @@ enable_http3_for_vhost_file() {
 
     if awk -v enable_http3="$enable_http3" -v enable_hq="$enable_hq" -v enable_quic="$enable_quic" -v enable_early="$enable_early" '
         function reset_flags() {
-            has_ssl=0; has_ssl6=0; has_http2=0; has_quic=0; has_quic6=0;
+            has_ssl=0; has_ssl6=0; has_http2=0; has_quic4=0; has_quic6=0;
             has_alt=0; has_alt29=0; has_alt_hq=0;
             has_http3_hq=0; has_quic_retry=0; has_quic_gso=0; has_early=0;
         }
@@ -5669,7 +5802,7 @@ enable_http3_for_vhost_file() {
                 if (line ~ /http2[[:space:]]+on;/ || line ~ /listen[[:space:]]+[^;]*443[^;]*http2/) {
                     has_http2=1;
                 }
-                if (line ~ /listen[[:space:]]+[^;#]*443[^;#]*quic/) { has_quic=1; }
+                if (line ~ /listen[[:space:]]+[^;#]*443[^;#]*quic/ && line !~ /\[::\]:443/) { has_quic4=1; }
                 if (line ~ /listen[[:space:]]+[^;#]*\[::\]:443[^;#]*quic/) { has_quic6=1; }
                 if (line ~ /Alt-Svc/ && line ~ /h3=/) { has_alt=1; }
                 if (line ~ /Alt-Svc/ && line ~ /h3-29/) { has_alt29=1; }
@@ -5686,16 +5819,31 @@ enable_http3_for_vhost_file() {
                 return;
             }
             inserted=0;
+            emitted_quic4=0;
+            emitted_quic6=0;
             sq = sprintf("%c", 39);
             for (i=1; i<=n; i++) {
                 line=buf[i];
+                # Normalize Certbot IPv6 ssl listener to avoid listen option collisions
+                if (line ~ /listen[[:space:]]+[^;#]*\[::\]:443[^;#]*ssl[[:space:]]+ipv6only=on;/) {
+                    sub(/ssl[[:space:]]+ipv6only=on;/, "ssl;", line);
+                }
+                # De-duplicate quic listeners inside a single server block
+                if (line ~ /listen[[:space:]]+[^;#]*443[^;#]*quic/ && line !~ /\[::\]:443/) {
+                    if (emitted_quic4 == 1) { continue; }
+                    emitted_quic4=1;
+                }
+                if (line ~ /listen[[:space:]]+[^;#]*\[::\]:443[^;#]*quic/) {
+                    if (emitted_quic6 == 1) { continue; }
+                    emitted_quic6=1;
+                }
                 print line;
                 if (!inserted && line ~ /listen[[:space:]]+[^;#]*443[^;#]*ssl/) {
                     match(line, /^[[:space:]]*/);
                     indent=substr(line, RSTART, RLENGTH);
                     if (!has_http2) print indent "http2 on;";
                     if (enable_http3 == "true") {
-                        if (!has_quic) print indent "listen 443 quic reuseport;";
+                        if (!has_quic4) print indent "listen 443 quic reuseport;";
                         if (has_ssl6 && !has_quic6) print indent "listen [::]:443 quic reuseport;";
                         if (!has_alt) print indent "add_header Alt-Svc " sq "h3=\":443\"; ma=86400" sq " always;";
                         if (!has_alt29) print indent "add_header Alt-Svc " sq "h3-29=\":443\"; ma=86400" sq " always;";
@@ -7213,6 +7361,7 @@ COMMANDS:
                               Deep protocol readiness check (config + local runtime probes)
   protocol-enforce [domain|--all]
                               Enforce HTTP/2 + HTTP/3/QUIC directives for one/all SSL vhosts
+  ensure-http3-curl           Build/install curl with HTTP/3 support (standalone)
   remove-old-backups [days]   Remove backups older than N days (default: auto)
   compression-status          Show gzip/brotli/zstd enablement and levels
   cache-status [domain|--all]
@@ -7290,6 +7439,9 @@ EXAMPLES:
   # Deep protocol audit and enforcement
   sudo bash $0 protocol-check --all
   sudo bash $0 protocol-enforce --all
+
+  # Ensure curl supports HTTP/3 without running full prerequisites
+  sudo bash $0 ensure-http3-curl
 
   # Optimize compression profile
   sudo bash $0 compression-optimize auto
@@ -9370,6 +9522,15 @@ main() {
         protocol-enforce)
             check_root
             if ! protocol_enforce "${2:---all}"; then
+                exit 1
+            fi
+            ;;
+
+        ensure-http3-curl)
+            check_root
+            check_network || exit 1
+            if ! ensure_http3_capable_curl; then
+                log_error "Failed to ensure HTTP/3-capable curl"
                 exit 1
             fi
             ;;
