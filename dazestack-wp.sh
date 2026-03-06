@@ -403,28 +403,28 @@ on_error() {
 
 validate_domain() {
     local domain=$1
-    
+
     # Check for empty input
     if [[ -z "$domain" ]]; then
         log_error "Domain cannot be empty"
         log_security "INVALID_INPUT" "Empty domain provided"
         return 1
     fi
-    
+
     # Check length (RFC 1035: max 253 characters)
     if [[ ${#domain} -gt 253 ]]; then
         log_error "Domain too long: ${#domain} characters (max 253)"
         log_security "INVALID_INPUT" "Domain length exceeded: $domain"
         return 1
     fi
-    
+
     # Check for minimum length
     if [[ ${#domain} -lt 3 ]]; then
         log_error "Domain too short: ${#domain} characters (min 3)"
         log_security "INVALID_INPUT" "Domain too short: $domain"
         return 1
     fi
-    
+
     # RFC 1035 compliant domain validation
     # - Only alphanumeric, hyphens, and dots
     # - Cannot start or end with hyphen or dot
@@ -435,28 +435,28 @@ validate_domain() {
         log_security "INVALID_INPUT" "Domain failed RFC 1035 validation: $domain"
         return 1
     fi
-    
+
     # Check for path traversal attempts
     if [[ "$domain" =~ \.\.|\/|\\|\$ ]]; then
         log_error "Domain contains invalid characters (path traversal attempt): $domain"
         log_security "SECURITY_VIOLATION" "Path traversal attempt detected in domain: $domain"
         return 1
     fi
-    
+
     # Check for SQL injection patterns
     if [[ "$domain" =~ [\'\"\;\`\|] ]]; then
         log_error "Domain contains SQL injection characters: $domain"
         log_security "SECURITY_VIOLATION" "SQL injection attempt detected in domain: $domain"
         return 1
     fi
-    
+
     # Check for command injection patterns
     if [[ "$domain" =~ [\$\(\)\{\}\[\]\<\>\&] ]]; then
         log_error "Domain contains command injection characters: $domain"
         log_security "SECURITY_VIOLATION" "Command injection attempt detected in domain: $domain"
         return 1
     fi
-    
+
     # Validate each label length (between dots)
     IFS='.' read -ra labels <<< "$domain"
     for label in "${labels[@]}"; do
@@ -471,10 +471,10 @@ validate_domain() {
             return 1
         fi
     done
-    
+
     # Additional security: convert to lowercase
     domain=$(echo "$domain" | tr '[:upper:]' '[:lower:]')
-    
+
     log_debug "Domain validated: $domain"
     echo "$domain"
     return 0
@@ -482,25 +482,25 @@ validate_domain() {
 
 validate_email() {
     local email=$1
-    
+
     if [[ -z "$email" ]]; then
         log_error "Email cannot be empty"
         log_security "INVALID_INPUT" "Empty email provided"
         return 1
     fi
-    
+
     if [[ ${#email} -gt 254 ]]; then
         log_error "Email too long"
         log_security "INVALID_INPUT" "Email length exceeded"
         return 1
     fi
-    
+
     if [[ ! "$email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
         log_error "Invalid email format: $email"
         log_security "INVALID_INPUT" "Email validation failed: $email"
         return 1
     fi
-    
+
     echo "$email"
     return 0
 }
@@ -588,20 +588,20 @@ should_include_www() {
 
 sanitize_site_title() {
     local title=$1
-    
+
     # Remove control characters and trim
     title=$(echo "$title" | tr -d '\r\n\t' | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')
-    
+
     if [[ -z "$title" ]]; then
         log_error "Site title cannot be empty"
         log_security "INVALID_INPUT" "Empty site title provided"
         return 1
     fi
-    
+
     if [[ ${#title} -gt 100 ]]; then
         title="${title:0:100}"
     fi
-    
+
     echo "$title"
     return 0
 }
@@ -612,14 +612,14 @@ sanitize_db_name() {
     # Replace dots with underscores, remove invalid chars
     local db_name="wp_${domain//./_}"
     db_name=$(echo "$db_name" | tr -cd '[:alnum:]_')
-    
+
     # MySQL database name max length is 64 characters
     if [[ ${#db_name} -gt 64 ]]; then
         # Truncate and add hash to ensure uniqueness
         local hash=$(echo "$domain" | sha256sum | cut -c1-8)
         db_name="${db_name:0:55}_${hash}"
     fi
-    
+
     echo "$db_name"
 }
 
@@ -628,12 +628,12 @@ sanitize_db_user() {
     # MySQL username max 32 characters (MariaDB 10.5+: 80 chars, but we use 32 for compatibility)
     local user="wp_${domain//./_}"
     user=$(echo "$user" | tr -cd '[:alnum:]_')
-    
+
     if [[ ${#user} -gt 32 ]]; then
         local hash=$(echo "$domain" | sha256sum | cut -c1-6)
         user="${user:0:25}_${hash}"
     fi
-    
+
     echo "$user"
 }
 
@@ -678,7 +678,7 @@ validate_mysql_connection() {
     if [[ -z "$MYSQL_SOCKET" ]]; then
         detect_mysql_socket >/dev/null 2>&1 || true
     fi
-    
+
     while [[ $attempt -lt $max_attempts ]]; do
         if mysql_exec "SELECT 1;" >/dev/null 2>&1; then
             return 0
@@ -686,7 +686,7 @@ validate_mysql_connection() {
         ((++attempt))
         sleep 2
     done
-    
+
     log_error "MySQL connection failed after $max_attempts attempts"
     return 1
 }
@@ -695,15 +695,15 @@ validate_redis_connection() {
     local password=$1
     local max_attempts=5
     local attempt=0
-    
+
     while [[ $attempt -lt $max_attempts ]]; do
-        if redis-cli -a "$password" PING 2>/dev/null | grep -q "PONG"; then
+        if redis-cli -s "$REDIS_SOCKET" -a "$password" PING 2>/dev/null | grep -q "PONG"; then
             return 0
         fi
         ((++attempt))
         sleep 2
     done
-    
+
     log_error "Redis connection failed after $max_attempts attempts"
     return 1
 }
@@ -715,11 +715,11 @@ validate_redis_connection() {
 
 initialize_master_keys() {
     log_info "Initializing encryption keys..."
-    
+
     # Create credentials directory with strict permissions
     mkdir -p "$CREDENTIALS_DIR"
     chmod 700 "$CREDENTIALS_DIR"
-    
+
     # Generate master encryption key if not exists
     if [[ ! -f "$MASTER_KEY_FILE" ]]; then
         openssl rand -base64 32 > "$MASTER_KEY_FILE"
@@ -727,7 +727,7 @@ initialize_master_keys() {
         log_success "Master encryption key generated"
         log_audit "KEY_GENERATION" "Master encryption key created"
     fi
-    
+
     # Generate backup encryption key if not exists
     if [[ ! -f "$BACKUP_KEY_FILE" ]]; then
         openssl rand -base64 32 > "$BACKUP_KEY_FILE"
@@ -735,24 +735,24 @@ initialize_master_keys() {
         log_success "Backup encryption key generated"
         log_audit "KEY_GENERATION" "Backup encryption key created"
     fi
-    
+
     log_success "Encryption keys initialized"
 }
 
 encrypt_credentials() {
     local plaintext_file=$1
     local encrypted_file="${plaintext_file}.enc"
-    
+
     if [[ ! -f "$plaintext_file" ]]; then
         log_error "Plaintext file not found: $plaintext_file"
         return 1
     fi
-    
+
     if [[ ! -f "$MASTER_KEY_FILE" ]]; then
         log_error "Master key not found: $MASTER_KEY_FILE"
         return 1
     fi
-    
+
     # Encrypt with AES-256-CBC using PBKDF2
     openssl enc -"$ENCRYPTION_CIPHER" -salt -pbkdf2 -iter 100000 \
         -in "$plaintext_file" \
@@ -761,13 +761,13 @@ encrypt_credentials() {
         log_error "Encryption failed for $plaintext_file"
         return 1
     }
-    
+
     # Securely delete plaintext file
     shred -u -n 3 "$plaintext_file" 2>/dev/null || rm -f "$plaintext_file"
-    
+
     # Set strict permissions on encrypted file
     chmod 400 "$encrypted_file"
-    
+
     log_debug "Credentials encrypted: $encrypted_file"
     return 0
 }
@@ -775,17 +775,17 @@ encrypt_credentials() {
 decrypt_credentials() {
     local encrypted_file=$1
     local plaintext_file="${encrypted_file%.enc}"
-    
+
     if [[ ! -f "$encrypted_file" ]]; then
         log_error "Encrypted file not found: $encrypted_file"
         return 1
     fi
-    
+
     if [[ ! -f "$MASTER_KEY_FILE" ]]; then
         log_error "Master key not found: $MASTER_KEY_FILE"
         return 1
     fi
-    
+
     # Decrypt credentials
     openssl enc -"$ENCRYPTION_CIPHER" -d -pbkdf2 -iter 100000 \
         -in "$encrypted_file" \
@@ -794,7 +794,7 @@ decrypt_credentials() {
         log_error "Decryption failed for $encrypted_file"
         return 1
     }
-    
+
     chmod 600 "$plaintext_file"
     log_debug "Credentials decrypted: $plaintext_file"
     return 0
@@ -804,26 +804,26 @@ get_credential() {
     local domain=$1
     local key=$2
     local cred_file="$CREDENTIALS_DIR/${domain}-credentials.txt"
-    
+
     if [[ ! -f "${cred_file}.enc" ]]; then
         log_error "Credential file not found for domain: $domain"
         return 1
     fi
-    
+
     # Decrypt temporarily
     decrypt_credentials "${cred_file}.enc" || return 1
-    
+
     # Extract value
     local value=$(grep "^${key}:" "$cred_file" 2>/dev/null | cut -d: -f2- | xargs)
-    
+
     # Clean up plaintext
     shred -u -n 3 "$cred_file" 2>/dev/null || rm -f "$cred_file"
-    
+
     if [[ -z "$value" ]]; then
         log_error "Credential key not found: $key for domain $domain"
         return 1
     fi
-    
+
     echo "$value"
     return 0
 }
@@ -839,34 +839,34 @@ registry_lock() {
     local max_wait=60
     local waited=0
     local lock_fd=""
-    
+
     if [[ -z "$registry" ]]; then
         log_error "Registry name is required for locking"
         return 1
     fi
-    
+
     if [[ -n "${REGISTRY_LOCK_FDS[$registry]:-}" ]]; then
         log_trace "Lock already held for $registry"
         return 0
     fi
-    
+
     # Create lock file if it doesn't exist
     touch "$lock_file" 2>/dev/null || {
         log_error "Cannot create lock file: $lock_file"
         return 1
     }
-    
+
     # Open file descriptor for locking
     if ! exec {lock_fd}>"$lock_file"; then
         log_error "Cannot open lock file descriptor: $lock_file"
         return 1
     fi
-    
+
     # Try to acquire exclusive lock with timeout
     while ! flock -n "$lock_fd" 2>/dev/null; do
         sleep 0.5
         waited=$((waited + 1))
-        
+
         if [[ $waited -ge $((max_wait * 2)) ]]; then
             log_error "Failed to acquire lock for $registry after ${max_wait}s"
             log_security "LOCK_TIMEOUT" "Registry lock timeout: $registry"
@@ -874,7 +874,7 @@ registry_lock() {
             return 1
         fi
     done
-    
+
     # Lock acquired successfully
     REGISTRY_LOCK_FDS["$registry"]=$lock_fd
     log_trace "Lock acquired for $registry (waited: ${waited}ms)"
@@ -911,20 +911,20 @@ execute_rollback() {
         log_debug "No rollback actions to execute"
         return 0
     fi
-    
+
     log_warn "Executing rollback (${#ROLLBACK_STACK[@]} actions)..."
-    
+
     # Execute rollback actions in reverse order (LIFO)
     for ((i=${#ROLLBACK_STACK[@]}-1; i>=0; i--)); do
         local action="${ROLLBACK_STACK[i]}"
         log_info "Rollback: $action"
-        
+
         # Execute rollback action
         eval "$action" 2>/dev/null || {
             log_error "Rollback action failed: $action"
         }
     done
-    
+
     # Clear rollback stack
     ROLLBACK_STACK=()
     log_success "Rollback completed"
@@ -935,7 +935,7 @@ safe_cleanup() {
     local normalized_path=""
     local allowed=false
     local base=""
-    
+
     # Validate path is not dangerous
     if [[ "$path" == "/" ]] || [[ "$path" == "/root" ]] || [[ "$path" == "/home" ]] || \
        [[ "$path" == "/etc" ]] || [[ "$path" == "/var" ]] || [[ "$path" == "/usr" ]]; then
@@ -946,7 +946,7 @@ safe_cleanup() {
 
     normalized_path="${path%/}"
     [[ -z "$normalized_path" ]] && normalized_path="$path"
-    
+
     # Only cleanup if path is within expected directories
     for base in "$SITES_DIR" "$BACKUP_DIR" "$CACHE_DIR"; do
         local normalized_base="${base%/}"
@@ -970,7 +970,7 @@ safe_cleanup() {
         log_warn "Path not in safe cleanup zone: $path"
         return 1
     fi
-    
+
     return 0
 }
 
@@ -981,11 +981,11 @@ safe_cleanup() {
 
 initialize_registries() {
     log_info "Initializing registries..."
-    
+
     mkdir -p "$STATE_DIR"
     chmod 700 "$STATE_DIR"
     local now=$(date +%s)
-    
+
     cat > "$REGISTRY_FILE" <<DOMAIN_REG
 {
   "version": "0.0.1",
@@ -1020,19 +1020,19 @@ REDIS_ALLOC
 redis_allocate_db() {
     local domain=$1
     local lock_name="redis-allocator"
-    
+
     # Acquire atomic lock
     registry_lock "$lock_name" || return 1
-    
+
     local allocator="$STATE_DIR/redis-allocator.json"
-    
+
     # Validate JSON file exists and is readable
     if [[ ! -f "$allocator" ]]; then
         log_error "Redis allocator registry not found" >&2
         registry_unlock "$lock_name"
         return 1
     fi
-    
+
     # Check if domain already has allocation
     local existing=$(jq -r ".allocations[\"$domain\"].db // \"null\"" "$allocator" 2>/dev/null)
     if [[ "$existing" != "null" ]]; then
@@ -1041,43 +1041,43 @@ redis_allocate_db() {
         echo "$existing"
         return 0
     fi
-    
+
     # Get first available database
     local available=$(jq -r '.free_databases[0] // "null"' "$allocator" 2>/dev/null)
-    
+
     if [[ -z "$available" ]] || [[ "$available" == "null" ]]; then
         log_error "No available Redis databases for $domain" >&2
         log_security "RESOURCE_EXHAUSTION" "Redis database pool exhausted"
         registry_unlock "$lock_name"
         return 1
     fi
-    
+
     # Atomic update with backup
     cp "$allocator" "${allocator}.backup"
-    
+
     if ! jq --arg domain "$domain" --arg db "$available" \
         '.allocations[$domain] = {
-            db: ($db|tonumber), 
+            db: ($db|tonumber),
             allocated_at: now,
             status: "active"
-        } | 
-        .free_databases |= map(select(. != ($db|tonumber))) | 
-        .metadata.total_allocated += 1 | 
+        } |
+        .free_databases |= map(select(. != ($db|tonumber))) |
+        .metadata.total_allocated += 1 |
         .metadata.last_updated = now' \
         "$allocator" > "${allocator}.tmp"; then
-        
+
         log_error "Failed to update Redis allocator" >&2
         mv "${allocator}.backup" "$allocator"
         registry_unlock "$lock_name"
         return 1
     fi
-    
+
     mv "${allocator}.tmp" "$allocator"
     rm -f "${allocator}.backup"
-    
+
     log_success "Allocated Redis DB $available for $domain" >&2
     log_audit "REDIS_DB_ALLOCATE" "domain=$domain db=$available"
-    
+
     registry_unlock "$lock_name"
     echo "$available"
     return 0
@@ -1086,50 +1086,50 @@ redis_allocate_db() {
 redis_release_db() {
     local domain=$1
     local lock_name="redis-allocator"
-    
+
     # Acquire atomic lock
     registry_lock "$lock_name" || return 1
-    
+
     local allocator="$STATE_DIR/redis-allocator.json"
-    
+
     # Get allocated database number
     local db=$(jq -r ".allocations[\"$domain\"].db // \"null\"" "$allocator" 2>/dev/null)
-    
+
     if [[ -z "$db" ]] || [[ "$db" == "null" ]]; then
         log_warn "Redis DB not found for $domain (may already be released)" >&2
         registry_unlock "$lock_name"
         return 0
     fi
-    
+
     # Flush the database before releasing
     if [[ -n "$REDIS_PASSWORD" ]]; then
-        redis-cli -a "$REDIS_PASSWORD" -n "$db" FLUSHDB 2>/dev/null || true
+        redis-cli -s "$REDIS_SOCKET" -a "$REDIS_PASSWORD" -n "$db" FLUSHDB 2>/dev/null || true
     fi
-    
+
     # Atomic update with backup
     cp "$allocator" "${allocator}.backup"
-    
+
     if ! jq --arg domain "$domain" --arg db "$db" \
-        'del(.allocations[$domain]) | 
-        .free_databases += [($db|tonumber)] | 
-        .free_databases |= sort | 
+        'del(.allocations[$domain]) |
+        .free_databases += [($db|tonumber)] |
+        .free_databases |= sort |
         .free_databases |= unique |
         .metadata.total_allocated -= 1 |
         .metadata.last_updated = now' \
         "$allocator" > "${allocator}.tmp"; then
-        
+
         log_error "Failed to update Redis allocator during release" >&2
         mv "${allocator}.backup" "$allocator"
         registry_unlock "$lock_name"
         return 1
     fi
-    
+
     mv "${allocator}.tmp" "$allocator"
     rm -f "${allocator}.backup"
-    
+
     log_success "Released Redis DB $db for $domain" >&2
     log_audit "REDIS_DB_RELEASE" "domain=$domain db=$db"
-    
+
     registry_unlock "$lock_name"
     return 0
 }
@@ -1143,29 +1143,29 @@ domain_register() {
     local site_title=${6:-}
     local admin_email=${7:-}
     local lock_name="domain"
-    
+
     # Acquire atomic lock
     registry_lock "$lock_name" || return 1
-    
+
     local registry="$REGISTRY_FILE"
-    
+
     # Validate inputs
     [[ -z "$domain" ]] || [[ -z "$redis_db" ]] || [[ -z "$pool_name" ]] && {
         log_error "Missing required parameters for domain registration"
         registry_unlock "$lock_name"
         return 1
     }
-    
+
     # Check if domain already registered
     if jq -e ".domains[\"$domain\"]" "$registry" >/dev/null 2>&1; then
         log_error "Domain already registered: $domain"
         registry_unlock "$lock_name"
         return 1
     fi
-    
+
     # Atomic update with backup
     cp "$registry" "${registry}.backup"
-    
+
     if ! jq --arg domain "$domain" \
            --arg redis_db "$redis_db" \
            --arg pool "$pool_name" \
@@ -1187,23 +1187,23 @@ domain_register() {
             created_at: now,
             status: "active",
             version: "0.0.1"
-        } | 
+        } |
         .metadata.total += 1 |
         .metadata.last_updated = now' \
         "$registry" > "${registry}.tmp"; then
-        
+
         log_error "Failed to update domain registry"
         mv "${registry}.backup" "$registry"
         registry_unlock "$lock_name"
         return 1
     fi
-    
+
     mv "${registry}.tmp" "$registry"
     rm -f "${registry}.backup"
-    
+
     log_success "Domain registered: $domain"
     log_audit "DOMAIN_REGISTER" "domain=$domain redis_db=$redis_db pool=$pool_name"
-    
+
     registry_unlock "$lock_name"
     return 0
 }
@@ -1211,40 +1211,40 @@ domain_register() {
 domain_unregister() {
     local domain=$1
     local lock_name="domain"
-    
+
     # Acquire atomic lock
     registry_lock "$lock_name" || return 1
-    
+
     local registry="$REGISTRY_FILE"
-    
+
     # Check if domain exists
     if ! jq -e ".domains[\"$domain\"]" "$registry" >/dev/null 2>&1; then
         log_warn "Domain not found in registry: $domain"
         registry_unlock "$lock_name"
         return 0
     fi
-    
+
     # Atomic update with backup
     cp "$registry" "${registry}.backup"
-    
+
     if ! jq --arg domain "$domain" \
-        'del(.domains[$domain]) | 
+        'del(.domains[$domain]) |
         .metadata.total -= 1 |
         .metadata.last_updated = now' \
         "$registry" > "${registry}.tmp"; then
-        
+
         log_error "Failed to update domain registry during unregistration"
         mv "${registry}.backup" "$registry"
         registry_unlock "$lock_name"
         return 1
     fi
-    
+
     mv "${registry}.tmp" "$registry"
     rm -f "${registry}.backup"
-    
+
     log_success "Domain unregistered: $domain"
     log_audit "DOMAIN_UNREGISTER" "domain=$domain"
-    
+
     registry_unlock "$lock_name"
     return 0
 }
@@ -1256,9 +1256,9 @@ domain_unregister() {
 
 calculate_system_resources() {
     log_section "Calculating Adaptive System Resources"
-    
+
     set_log_context "Resource-Calc"
-    
+
     # Detect total RAM
     local total_ram
     if command -v free &>/dev/null; then
@@ -1266,38 +1266,38 @@ calculate_system_resources() {
     else
         total_ram=$(awk '/^MemTotal:/{print $2*1024}' /proc/meminfo 2>/dev/null || echo 1073741824)
     fi
-    
+
     SYSTEM_RAM_GB=$((total_ram / 1024 / 1024 / 1024))
     SYSTEM_RAM_MB=$((total_ram / 1024 / 1024))
-    
+
     if [[ $SYSTEM_RAM_MB -lt 512 ]]; then
         log_error "Insufficient RAM: ${SYSTEM_RAM_MB}MB (minimum 512MB required)"
         return 1
     fi
-    
+
     # Detect CPU cores
     if command -v nproc &>/dev/null; then
         SYSTEM_CPU_CORES=$(nproc 2>/dev/null || echo 1)
     else
         SYSTEM_CPU_CORES=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo 1)
     fi
-    
+
     [[ $SYSTEM_CPU_CORES -lt 1 ]] && SYSTEM_CPU_CORES=1
-    
+
     log_info "Detected: ${SYSTEM_RAM_GB}GB RAM, $SYSTEM_CPU_CORES CPU cores"
-    
+
     # ========================================================================
     # CORRECTED PHP-FPM CALCULATION
     # Reality: WordPress with plugins uses 128-256MB per request
     # We use conservative estimates to prevent OOM
     # ========================================================================
-    
+
     # Reserve memory for system, MySQL, Redis, Nginx (dynamic for low-memory systems)
     local system_reserved_mb=512
     local mysql_reserved_mb=$((SYSTEM_RAM_MB * 50 / 100))  # 50% for MySQL
     local redis_reserved_mb=$((SYSTEM_RAM_MB * 10 / 100))  # 10% for Redis
     local nginx_reserved_mb=100
-    
+
     if [[ $SYSTEM_RAM_MB -le 1024 ]]; then
         system_reserved_mb=256
         mysql_reserved_mb=$((SYSTEM_RAM_MB * 25 / 100))
@@ -1310,19 +1310,19 @@ calculate_system_resources() {
         redis_reserved_mb=128
         nginx_reserved_mb=64
     fi
-    
+
     local total_reserved_mb=$((system_reserved_mb + mysql_reserved_mb + redis_reserved_mb + nginx_reserved_mb))
     local php_available_mb=$((SYSTEM_RAM_MB - total_reserved_mb))
-    
+
     # Ensure we have at least some memory for PHP
     if [[ $php_available_mb -lt 128 ]]; then
         log_warn "Very limited memory for PHP-FPM: ${php_available_mb}MB"
         php_available_mb=128
     fi
-    
+
     # REALISTIC PHP process size (WordPress + WooCommerce average)
     local php_process_size=80  # Base: 80MB per child process
-    
+
     # Adjust process size based on available memory (larger sites can use more)
     if [[ $SYSTEM_RAM_MB -le 1024 ]]; then
         php_process_size=48   # Minimal mode
@@ -1340,33 +1340,33 @@ calculate_system_resources() {
         php_process_size=128
         PHP_MEMORY_LIMIT="2048M"
     fi
-    
+
     # Calculate max children with safety margin (80% of available)
     PHP_MAX_CHILDREN=$((php_available_mb * 8 / 10 / php_process_size))
-    
+
     # Enforce reasonable limits
     [[ $PHP_MAX_CHILDREN -lt 2 ]] && PHP_MAX_CHILDREN=2
     [[ $PHP_MAX_CHILDREN -gt 256 ]] && PHP_MAX_CHILDREN=256
-    
+
     # Calculate pool workers
     PHP_START_SERVERS=$((PHP_MAX_CHILDREN / 3))
     [[ $PHP_START_SERVERS -lt 1 ]] && PHP_START_SERVERS=1
-    
+
     PHP_MIN_SPARE=$((PHP_MAX_CHILDREN / 6))
     [[ $PHP_MIN_SPARE -lt 1 ]] && PHP_MIN_SPARE=1
-    
+
     PHP_MAX_SPARE=$((PHP_MAX_CHILDREN / 2))
     [[ $PHP_MAX_SPARE -lt 1 ]] && PHP_MAX_SPARE=1
     [[ $PHP_MAX_SPARE -le $PHP_MIN_SPARE ]] && PHP_MAX_SPARE=$((PHP_MIN_SPARE + 1))
-    
+
     # MySQL configuration
     MYSQL_INNODB_BUFFER="${mysql_reserved_mb}M"
-    
+
     local log_size_mb=$((mysql_reserved_mb / 4))
     [[ $log_size_mb -lt 50 ]] && log_size_mb=50
     [[ $log_size_mb -gt 512 ]] && log_size_mb=512
     MYSQL_LOG_FILE_SIZE="${log_size_mb}M"
-    
+
     if [[ $SYSTEM_RAM_MB -le 2048 ]]; then
         MYSQL_BUFFER_POOL_INSTANCES=1
     elif [[ $SYSTEM_RAM_MB -le 8192 ]]; then
@@ -1374,13 +1374,13 @@ calculate_system_resources() {
     else
         MYSQL_BUFFER_POOL_INSTANCES=4
     fi
-    
+
     # Redis configuration
     REDIS_MEMORY="${redis_reserved_mb}mb"
-    
+
     # Nginx configuration
     NGINX_WORKER_PROCESSES=$SYSTEM_CPU_CORES
-    
+
     if [[ $SYSTEM_CPU_CORES -le 2 ]]; then
         NGINX_WORKER_CONNECTIONS=512
     elif [[ $SYSTEM_CPU_CORES -le 8 ]]; then
@@ -1388,7 +1388,7 @@ calculate_system_resources() {
     else
         NGINX_WORKER_CONNECTIONS=2048
     fi
-    
+
     # Cache sizing based on disk
     local disk_total_mb=$(df -m / | awk 'NR==2 {print $2}')
     if [[ $disk_total_mb -lt 20000 ]]; then
@@ -1396,20 +1396,20 @@ calculate_system_resources() {
     else
         NGINX_CACHE_MAX_SIZE="1g"
     fi
-    
+
     # Export all variables
     export SYSTEM_RAM_GB SYSTEM_RAM_MB SYSTEM_CPU_CORES
     export PHP_MAX_CHILDREN PHP_START_SERVERS PHP_MIN_SPARE PHP_MAX_SPARE
     export PHP_MEMORY_LIMIT MYSQL_INNODB_BUFFER MYSQL_LOG_FILE_SIZE MYSQL_BUFFER_POOL_INSTANCES
     export REDIS_MEMORY NGINX_WORKER_PROCESSES NGINX_WORKER_CONNECTIONS NGINX_CACHE_MAX_SIZE
-    
+
     # Log resource allocation
     log_info "Resource Allocation:"
     log_info "  PHP: ${php_available_mb}MB (max_children=$PHP_MAX_CHILDREN, process_size=${php_process_size}MB, memory_limit=$PHP_MEMORY_LIMIT)"
     log_info "  MySQL: $MYSQL_INNODB_BUFFER buffer, $MYSQL_LOG_FILE_SIZE log, instances=$MYSQL_BUFFER_POOL_INSTANCES"
     log_info "  Redis: $REDIS_MEMORY"
     log_info "  Nginx: $NGINX_WORKER_PROCESSES workers, $NGINX_WORKER_CONNECTIONS connections, cache_max=$NGINX_CACHE_MAX_SIZE"
-    
+
     log_success "Resources calculated (realistic PHP sizing applied)"
 }
 
@@ -1420,21 +1420,21 @@ calculate_system_resources() {
 
 detect_mysql_socket() {
     log_info "Detecting MySQL socket..."
-    
+
     local socket=""
-    
+
     # Method 1: Ask mysqladmin
     if command -v mysqladmin &>/dev/null; then
         socket=$(mysqladmin variables 2>/dev/null | grep "^| socket" | awk '{print $4}' | tr -d '|' | xargs)
     fi
-    
+
     # Method 2: Parse MySQL configuration
     if [[ -z "$socket" ]]; then
         if [[ -d /etc/mysql ]]; then
             socket=$(grep -r "^socket" /etc/mysql/ 2>/dev/null | head -1 | awk '{print $3}' | tr -d '"' | xargs)
         fi
     fi
-    
+
     # Method 3: Check common locations
     if [[ -z "$socket" ]]; then
         for path in /run/mysqld/mysqld.sock /var/run/mysqld/mysqld.sock /tmp/mysql.sock /var/lib/mysql/mysql.sock; do
@@ -1444,22 +1444,22 @@ detect_mysql_socket() {
             fi
         done
     fi
-    
+
     # Method 4: Use MySQL to find itself
     if [[ -z "$socket" ]] && command -v mysql &>/dev/null; then
         socket=$(mysql -e "SHOW VARIABLES LIKE 'socket';" 2>/dev/null | awk 'NR==2 {print $2}')
     fi
-    
+
     if [[ -z "$socket" ]]; then
         log_error "Could not detect MySQL socket"
         return 1
     fi
-    
+
     if [[ ! -S "$socket" ]]; then
         log_error "MySQL socket not found at detected location: $socket"
         return 1
     fi
-    
+
     MYSQL_SOCKET="$socket"
     log_success "MySQL socket detected: $MYSQL_SOCKET"
     return 0
@@ -1467,37 +1467,37 @@ detect_mysql_socket() {
 
 detect_php_version() {
     [[ -n "$PHP_VERSION" ]] && return 0
-    
+
     local version=""
-    
+
     # Method 1: Installation record
     if [[ -f "$INSTALL_RECORD_FILE" ]]; then
         version=$(awk -F': ' '/^PHP:/ {print $2}' "$INSTALL_RECORD_FILE" 2>/dev/null | xargs)
     fi
-    
+
     # Method 2: Installed PHP directories
     if [[ -z "$version" ]] && [[ -d /etc/php ]]; then
         version=$(ls -1 /etc/php 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' | sort -V | tail -1)
     fi
-    
+
     # Method 3: PHP binary
     if [[ -z "$version" ]] && command -v php &>/dev/null; then
         version=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || true)
     fi
-    
+
     if [[ -z "$version" ]]; then
         log_error "Unable to detect PHP version"
         return 1
     fi
-    
+
     PHP_VERSION="$version"
     export PHP_VERSION
     log_success "PHP version detected: $PHP_VERSION"
-    
+
     if [[ "$PHP_VERSION" != "$PHP_TARGET_VERSION" ]]; then
         log_warn "Detected PHP $PHP_VERSION (target is $PHP_TARGET_VERSION)"
     fi
-    
+
     return 0
 }
 
@@ -1519,14 +1519,14 @@ check_os() {
         log_error "Cannot determine operating system"
         exit 1
     }
-    
+
     . /etc/os-release
     [[ "$ID" != "ubuntu" ]] && {
         log_error "Ubuntu required (detected: $PRETTY_NAME)"
         log_info "This installer is designed for Ubuntu 24.04+ only"
         exit 1
     }
-    
+
     local major=${VERSION_ID%%.*}
     local minor=${VERSION_ID#*.}
     minor=${minor%%.*}
@@ -1552,39 +1552,39 @@ check_os() {
 check_system_resources() {
     log_info "Analyzing system resources..."
     calculate_system_resources || exit 1
-    
+
     # Validate minimum requirements
     if [[ $SYSTEM_RAM_MB -lt 512 ]]; then
         log_error "Minimum 512MB RAM required (found: ${SYSTEM_RAM_MB}MB)"
         exit 1
     fi
-    
+
     if [[ $SYSTEM_RAM_MB -lt 1024 ]]; then
         log_warn "Running in MINIMAL mode (512-1023MB RAM)"
         log_warn "Recommended: 2GB+ RAM for production use"
     fi
-    
+
     # Check disk space
     local disk_available=$(df / | awk 'NR==2 {print $4}')
     local disk_available_gb=$((disk_available / 1024 / 1024))
-    
+
     if [[ $disk_available_gb -lt 5 ]]; then
         log_error "Minimum 5GB disk space required (found: ${disk_available_gb}GB)"
         exit 1
     fi
-    
+
     if [[ $disk_available_gb -lt 10 ]]; then
         log_warn "Disk space low: ${disk_available_gb}GB (recommended: 10GB+)"
     fi
-    
+
     log_success "System resources validated"
 }
 
 check_network() {
     log_info "Checking network connectivity..."
-    
+
     local connected=false
-    
+
     # ICMP ping can be blocked; try it first, then fallback to HTTPS/TCP
     local hosts=("8.8.8.8" "1.1.1.1")
     if command -v ping &>/dev/null; then
@@ -1595,7 +1595,7 @@ check_network() {
             fi
         done
     fi
-    
+
     if [[ "$connected" == "false" ]]; then
         if command -v curl &>/dev/null; then
             curl -fsSL --max-time 5 https://www.cloudflare.com >/dev/null 2>&1 && connected=true
@@ -1605,40 +1605,40 @@ check_network() {
             timeout 5 bash -c 'cat < /dev/tcp/1.1.1.1/80' >/dev/null 2>&1 && connected=true
         fi
     fi
-    
+
     if [[ "$connected" == "false" ]]; then
         log_error "No internet connectivity detected"
         log_info "Internet connection required for package installation"
         return 1
     fi
-    
+
     log_success "Network connectivity confirmed"
     return 0
 }
 
 check_dependencies() {
     log_info "Checking required dependencies..."
-    
+
     local missing=()
     local commands=(
         bash awk sed grep cut tr date stat chmod chown mkdir rm find touch ln
         systemctl timeout flock openssl curl wget jq apt-cache dpkg
         php mysql mysqladmin mysqldump redis-cli nginx certbot
     )
-    
+
     for cmd in "${commands[@]}"; do
         command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
-    
+
     if [[ ! -x "$WP_CLI_BIN" ]]; then
         missing+=("wp-cli")
     fi
-    
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing dependencies: ${missing[*]}"
         return 1
     fi
-    
+
     log_success "All dependencies present"
     return 0
 }
@@ -1655,7 +1655,7 @@ check_prior_initialization() {
 
 initialize_directories() {
     log_info "Creating directory structure..."
-    
+
     # Create all required directories
     mkdir -p "$INSTALL_DIR" "$LOG_DIR" "$BACKUP_DIR" "$CACHE_DIR" "$CONFIG_DIR" "$STATE_DIR"
     mkdir -p /var/log/{php-fpm,mysql,nginx,redis,wordpress}
@@ -1663,12 +1663,12 @@ initialize_directories() {
     mkdir -p /etc/nginx/{sites-available,sites-enabled,conf.d,snippets}
     mkdir -p /var/lib/php/sessions
     mkdir -p "$SITES_DIR"
-    
+
     # Set appropriate permissions
     chmod 755 "$INSTALL_DIR" "$LOG_DIR" "$BACKUP_DIR" "$CACHE_DIR" "$CONFIG_DIR"
     chmod 700 "$STATE_DIR" "$CREDENTIALS_DIR"
     chmod 1733 /var/lib/php/sessions  # Sticky bit + group writable
-    
+
     log_success "Directory structure created"
 }
 
@@ -1853,13 +1853,13 @@ check_php_package_availability() {
     local wrong_origin=()
     local ppa_missing=()
     local core_pkgs=("php${PHP_VERSION}" "php${PHP_VERSION}-fpm" "php${PHP_VERSION}-cli")
-    
+
     for pkg in "${packages[@]}"; do
         local policy
         policy=$(apt-cache policy "$pkg" 2>/dev/null || true)
         local candidate
         candidate=$(echo "$policy" | awk '/Candidate:/ {print $2}')
-        
+
         if [[ -z "$candidate" || "$candidate" == "(none)" ]]; then
             if php_package_is_optional "$pkg"; then
                 log_warn "Optional PHP package not available (built-in/merged): $pkg"
@@ -1868,7 +1868,7 @@ check_php_package_availability() {
             fi
             continue
         fi
-        
+
         for core in "${core_pkgs[@]}"; do
             if [[ "$pkg" == "$core" ]]; then
                 if ! policy_candidate_from_ondrej "$policy" "$candidate"; then
@@ -1881,13 +1881,13 @@ check_php_package_availability() {
             fi
         done
     done
-    
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "PHP $PHP_VERSION packages not available: ${missing[*]}"
         log_error "Ensure ppa:ondrej/php is reachable and supports Ubuntu 24.04"
         return 1
     fi
-    
+
     if [[ ${#ppa_missing[@]} -gt 0 ]]; then
         log_error "Ondrej PHP PPA not detected for core packages: ${ppa_missing[*]}"
         log_error "The PPA may not publish PHP $PHP_VERSION for this Ubuntu release yet"
@@ -1901,7 +1901,7 @@ check_php_package_availability() {
         log_info "Check APT pinning or other PHP repositories, then re-run"
         return 1
     fi
-    
+
     return 0
 }
 
@@ -2098,37 +2098,37 @@ php_package_is_optional() {
 verify_php_installation() {
     local packages=("$@")
     local missing=()
-    
+
     for pkg in "${packages[@]}"; do
         dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
     done
-    
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing PHP packages after install: ${missing[*]}"
         return 1
     fi
-    
+
     # Verify core extensions
     local modules
     modules=$(php -m 2>/dev/null | tr '[:upper:]' '[:lower:]')
     local required=(curl gd mbstring xml zip intl soap bcmath redis)
     local missing_mods=()
-    
+
     for mod in "${required[@]}"; do
         if ! echo "$modules" | grep -qx "$mod"; then
             missing_mods+=("$mod")
         fi
     done
-    
+
     if ! echo "$modules" | grep -qx "mysqli" && ! echo "$modules" | grep -qx "mysqlnd"; then
         missing_mods+=("mysqli/mysqlnd")
     fi
-    
+
     if [[ ${#missing_mods[@]} -gt 0 ]]; then
         log_error "Missing PHP extensions: ${missing_mods[*]}"
         return 1
     fi
-    
+
     return 0
 }
 
@@ -2136,20 +2136,20 @@ ensure_wp_cli() {
     if [[ -x "$WP_CLI_BIN" ]]; then
         return 0
     fi
-    
+
     log_info "Installing WP-CLI..."
     if ! curl -fsSL "$WP_CLI_URL" -o "$WP_CLI_BIN" 2>/dev/null; then
         log_error "Failed to download WP-CLI"
         return 1
     fi
-    
+
     chmod +x "$WP_CLI_BIN"
-    
+
     if ! "$WP_CLI_BIN" --info >/dev/null 2>&1; then
         log_error "WP-CLI installation verification failed"
         return 1
     fi
-    
+
     log_success "WP-CLI installed"
     return 0
 }
@@ -2167,7 +2167,7 @@ run_wp_cli() {
     shift
 
     ensure_wp_cli_cache
-    
+
     if id -u www-data &>/dev/null; then
         if command -v sudo &>/dev/null; then
             sudo -u www-data -H env WP_CLI_CACHE_DIR="$WP_CLI_CACHE_DIR" "$WP_CLI_BIN" --path="$path" "$@"
@@ -2182,7 +2182,7 @@ run_wp_cli() {
             return $?
         fi
     fi
-    
+
     WP_CLI_CACHE_DIR="$WP_CLI_CACHE_DIR" "$WP_CLI_BIN" --path="$path" "$@" --allow-root
 }
 
@@ -2192,19 +2192,19 @@ configure_cloudflare_realip() {
         return 0
     fi
     log_info "Configuring Cloudflare real IP integration..."
-    
+
     # Ensure file exists to avoid nginx include errors
     if [[ ! -f "$CLOUDFLARE_CONF" ]]; then
         echo "# Cloudflare IPs not loaded yet" > "$CLOUDFLARE_CONF"
     fi
-    
+
     if ! command -v curl &>/dev/null; then
         log_warn "curl not found; skipping Cloudflare IP fetch"
         return 1
     fi
-    
+
     local tmp_file="/tmp/cloudflare-ips.conf.$$"
-    
+
     {
         echo "# Cloudflare IP ranges"
         curl -fsSL "$CLOUDFLARE_IPS_V4_URL" 2>/dev/null | sed 's/^/set_real_ip_from /;s/$/;/' || true
@@ -2212,22 +2212,22 @@ configure_cloudflare_realip() {
         echo "real_ip_header CF-Connecting-IP;"
         echo "real_ip_recursive on;"
     } > "$tmp_file"
-    
+
     if [[ ! -s "$tmp_file" ]]; then
         log_warn "Cloudflare IP list empty; skipping"
         rm -f "$tmp_file"
         return 1
     fi
-    
+
     mv "$tmp_file" "$CLOUDFLARE_CONF"
     chmod 644 "$CLOUDFLARE_CONF"
-    
+
     # Daily refresh
     cat > "$CLOUDFLARE_CRON" <<'CF_CRON'
 0 3 * * * root /usr/local/bin/update-cloudflare-ips.sh >/dev/null 2>&1
 CF_CRON
     chmod 644 "$CLOUDFLARE_CRON"
-    
+
     # Helper script for updates
     cat > /usr/local/bin/update-cloudflare-ips.sh <<'CF_UPDATE'
 #!/bin/bash
@@ -2255,7 +2255,7 @@ else
 fi
 CF_UPDATE
     chmod +x /usr/local/bin/update-cloudflare-ips.sh
-    
+
     log_success "Cloudflare real IP configuration updated"
     return 0
 }
@@ -2296,9 +2296,9 @@ configure_firewall_preserve() {
     if ! command -v ufw &>/dev/null; then
         return 0
     fi
-    
+
     log_info "Configuring UFW firewall (preserve existing rules)..."
-    
+
     local ssh_port="22"
     if command -v sshd &>/dev/null; then
         ssh_port=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || echo "22")
@@ -2306,19 +2306,19 @@ configure_firewall_preserve() {
         ssh_port=$(grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | tail -1)
         [[ -z "$ssh_port" ]] && ssh_port="22"
     fi
-    
+
     ufw allow "$ssh_port"/tcp >/dev/null 2>&1 || true
     ufw allow http >/dev/null 2>&1 || true
     ufw allow https >/dev/null 2>&1 || true
     if [[ "$ENABLE_HTTP3" == "true" ]]; then
         ufw allow 443/udp >/dev/null 2>&1 || true
     fi
-    
+
     if ufw status | grep -q "Status: active"; then
         log_success "UFW rules updated (existing rules preserved)"
         return 0
     fi
-    
+
     ufw default deny incoming >/dev/null 2>&1 || true
     ufw default allow outgoing >/dev/null 2>&1 || true
     echo "y" | ufw enable >/dev/null 2>&1
@@ -2938,11 +2938,11 @@ write_microcache_config() {
 
     cat > /etc/nginx/conf.d/10-cache-zones.conf <<'NGINX_CACHE'
 # FastCGI micro-cache zones
-fastcgi_cache_path /var/cache/nginx/microcache 
-    levels=1:2 
-    keys_zone=wordpress_cache:100m 
-    max_size=CACHE_MAX_SIZE 
-    inactive=CACHE_INACTIVE 
+fastcgi_cache_path /var/cache/nginx/microcache
+    levels=1:2
+    keys_zone=wordpress_cache:100m
+    max_size=CACHE_MAX_SIZE
+    inactive=CACHE_INACTIVE
     use_temp_path=off;
 
 # Keep cache key aligned with purge key logic.
@@ -4495,19 +4495,19 @@ get_total_sites() {
 calculate_pool_limits() {
     local total_sites=$1
     [[ $total_sites -lt 1 ]] && total_sites=1
-    
+
     local site_max_children=$((PHP_MAX_CHILDREN / total_sites))
     [[ $site_max_children -lt 2 ]] && site_max_children=2
-    
+
     local site_start=$((site_max_children / 3))
     [[ $site_start -lt 1 ]] && site_start=1
-    
+
     local site_min=$((site_max_children / 6))
     [[ $site_min -lt 1 ]] && site_min=1
-    
+
     local site_max=$((site_max_children / 2))
     [[ $site_max -le $site_min ]] && site_max=$((site_min + 1))
-    
+
     echo "$site_max_children $site_start $site_min $site_max"
 }
 
@@ -4520,7 +4520,7 @@ write_php_pool_config() {
     local site_min=$6
     local site_max=$7
     local php_socket="/run/php/php${PHP_VERSION}-${pool_name}.sock"
-    
+
     cat > "/etc/php/${PHP_VERSION}/fpm/pool.d/${pool_name}.conf" <<POOL_CONFIG
 [$pool_name]
 user = www-data
@@ -4601,13 +4601,13 @@ BOOTSTRAP_POOL
 rebalance_php_pools() {
     local registry="$REGISTRY_FILE"
     [[ ! -f "$registry" ]] && return 0
-    
+
     local total_sites
     total_sites=$(get_total_sites)
     [[ $total_sites -lt 1 ]] && return 0
-    
+
     read -r site_max_children site_start site_min site_max < <(calculate_pool_limits "$total_sites")
-    
+
     jq -r '.domains | to_entries[] | "\(.key) \(.value.php_pool)"' "$registry" 2>/dev/null | while read -r domain pool_name; do
         [[ -z "$domain" ]] && continue
         local site_dir="$SITES_DIR/$domain"
@@ -4616,7 +4616,7 @@ rebalance_php_pools() {
             write_php_pool_config "$pool_name" "$site_dir" "$site_tmp" "$site_max_children" "$site_start" "$site_min" "$site_max"
         fi
     done
-    
+
     systemctl reload php${PHP_VERSION}-fpm 2>/dev/null || true
     log_success "Rebalanced PHP-FPM pools across $total_sites sites"
 }
@@ -4629,13 +4629,13 @@ rebalance_php_pools() {
 phase_system_prerequisites() {
     log_section "Phase 1: System Prerequisites"
     set_log_context "Phase-1" "Prerequisites"
-    
+
     log_info "Updating package lists..."
     apt-get update > /dev/null 2>&1 || {
         log_error "Failed to update package lists"
         exit 1
     }
-    
+
     safe_apt_install \
         curl wget jq git htop net-tools ca-certificates gnupg \
         python3 logrotate unzip gzip tar bzip2 sudo \
@@ -4646,7 +4646,7 @@ phase_system_prerequisites() {
     if [[ "$ENABLE_HTTP3" == "true" ]]; then
         ensure_http3_capable_curl || log_warn "Proceeding without HTTP/3-capable curl"
     fi
-    
+
     log_success "System prerequisites installed"
     PHASE_CURRENT=1
 }
@@ -4654,7 +4654,7 @@ phase_system_prerequisites() {
 phase_php_installation() {
     log_section "Phase 2: PHP Installation"
     set_log_context "Phase-2" "PHP"
-    
+
     log_info "Adding PHP repository..."
     if [[ "$PHP_TARGET_VERSION" != "8.5" ]]; then
         log_warn "This release is tuned for PHP 8.5 (current target: $PHP_TARGET_VERSION)"
@@ -4663,12 +4663,12 @@ phase_php_installation() {
         log_error "Failed to add PHP repository"
         exit 1
     }
-    
+
     apt-get update > /dev/null 2>&1
-    
+
     # Default to PHP 8.5 (stable)
     PHP_VERSION="$PHP_TARGET_VERSION"
-    
+
     local php_required_packages=(
         "php${PHP_VERSION}"
         "php${PHP_VERSION}-fpm"
@@ -4689,7 +4689,7 @@ phase_php_installation() {
     for opt in "${PHP_OPTIONAL_PACKAGES[@]}"; do
         php_packages+=("php${PHP_VERSION}-${opt}")
     done
-    
+
     ensure_ondrej_php_preferred || exit 1
 
     log_info "Checking PHP $PHP_VERSION package availability (ppa:ondrej/php)..."
@@ -4704,7 +4704,7 @@ phase_php_installation() {
     done
     log_info "Installing PHP $PHP_VERSION and extensions..."
     safe_apt_install "${install_packages[@]}" || exit 1
-    
+
     local pool_dir="/etc/php/${PHP_VERSION}/fpm/pool.d"
     if ! compgen -G "${pool_dir}/*.conf" >/dev/null; then
         log_warn "No PHP-FPM pools found; creating bootstrap pool"
@@ -4716,34 +4716,34 @@ phase_php_installation() {
         log_error "Failed to start PHP-FPM"
         exit 1
     }
-    
+
     systemctl enable php${PHP_VERSION}-fpm
     sleep 3
-    
+
     # PHP performance and security tuning
     write_php_tuning "$PHP_VERSION"
     systemctl restart php${PHP_VERSION}-fpm
     sleep 2
-    
+
     # Verify PHP-FPM socket
     if [[ ! -S /run/php/php${PHP_VERSION}-fpm.sock ]]; then
         log_error "PHP-FPM socket not found"
         systemctl status php${PHP_VERSION}-fpm
         exit 1
     fi
-    
+
     if ! php -v 2>/dev/null | head -1 | grep -q "$PHP_VERSION"; then
         log_error "PHP binary version mismatch after install"
         exit 1
     fi
-    
+
     verify_php_installation "${install_packages[@]}" || exit 1
-    
+
     ensure_wp_cli || {
         log_error "WP-CLI installation failed"
         exit 1
     }
-    
+
     log_success "PHP $PHP_VERSION installed and verified"
     PHASE_CURRENT=2
 }
@@ -4751,21 +4751,21 @@ phase_php_installation() {
 phase_certbot() {
     log_section "Phase 3: SSL Certificate Tools"
     set_log_context "Phase-3" "Certbot"
-    
+
     if [[ "$ENABLE_CLOUDFLARE" == "true" ]]; then
         safe_apt_install certbot python3-certbot-nginx python3-certbot-dns-cloudflare || exit 1
     else
         safe_apt_install certbot python3-certbot-nginx || exit 1
     fi
-    
+
     mkdir -p /etc/letsencrypt/{live,renewal,renewal-hooks/post}
-    
+
     # Create auto-reload hook
     cat > /etc/letsencrypt/renewal-hooks/post/nginx-reload.sh <<'CERTBOT_RELOAD'
 #!/bin/bash
 systemctl reload nginx 2>/dev/null || systemctl restart nginx
 CERTBOT_RELOAD
-    
+
     chmod +x /etc/letsencrypt/renewal-hooks/post/nginx-reload.sh
 
     cat > /etc/letsencrypt/renewal-hooks/post/nginx-rollback.sh <<'CERTBOT_ROLLBACK'
@@ -4777,7 +4777,7 @@ fi
 CERTBOT_ROLLBACK
 
     chmod +x /etc/letsencrypt/renewal-hooks/post/nginx-rollback.sh
-    
+
     log_success "Certbot configured"
     PHASE_CURRENT=3
 }
@@ -4831,11 +4831,11 @@ phase_nginx() {
     write_nginx_rate_limits
     write_nginx_visibility_config
     install_image_optimization_cron
-    
+
     # Cloudflare integration
     configure_cloudflare_realip || log_warn "Cloudflare real IP configuration not applied"
     write_cloudflare_recommendations
-    
+
     if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid"; then
         exit 1
     fi
@@ -4863,40 +4863,40 @@ phase_nginx() {
             "$HTTP3_AVAILABLE" "$BROTLI_AVAILABLE" "$ZSTD_AVAILABLE" \
             "success" "package install"
     fi
-    
+
     log_success "Nginx configured with security safeguards"
     PHASE_CURRENT=4
 }
 phase_mariadb() {
     log_section "Phase 5: MariaDB Database Server"
     set_log_context "Phase-5" "MariaDB"
-    
+
     DEBIAN_FRONTEND=noninteractive safe_apt_install mariadb-server mariadb-client || exit 1
-    
+
     systemctl enable mariadb
     systemctl start mariadb
     sleep 3
-    
+
     # Detect MySQL socket
     detect_mysql_socket || exit 1
-    
+
     # Validate connection
     validate_mysql_connection || {
         log_error "MariaDB failed to start properly"
         exit 1
     }
-    
+
     # Performance configuration
     write_mariadb_tuning
 
     systemctl restart mariadb
     sleep 3
-    
+
     validate_mysql_connection || {
         log_error "MariaDB failed after configuration"
         exit 1
     }
-    
+
     log_success "MariaDB installed and configured"
     PHASE_CURRENT=5
 }
@@ -4904,16 +4904,16 @@ phase_mariadb() {
 phase_redis() {
     log_section "Phase 6: Redis Cache Server"
     set_log_context "Phase-6" "Redis"
-    
+
     safe_apt_install redis-server redis-tools || exit 1
-    
+
     systemctl enable redis-server
     systemctl start redis-server
     sleep 2
-    
+
     # Generate strong Redis password
     REDIS_PASSWORD=$(generate_secure_password 48)
-    
+
     # SECURE Redis configuration
     cat > /etc/redis/redis.conf <<REDIS_CONFIG
 # Memory
@@ -4926,9 +4926,12 @@ databases 16
 
 # Security
 requirepass $REDIS_PASSWORD
-bind 127.0.0.1
 protected-mode yes
-port 6379
+port 0
+
+# Unix Socket
+unixsocket $REDIS_SOCKET
+unixsocketperm 770
 
 # Performance
 timeout 0
@@ -4942,11 +4945,18 @@ loglevel notice
 logfile /var/log/redis/redis-server.log
 REDIS_CONFIG
 
+    # Add www-data to redis group
+    if id -u www-data >/dev/null 2>&1; then
+        usermod -aG redis www-data
+        if [[ -n "${PHP_VERSION:-}" ]]; then
+            systemctl restart "php${PHP_VERSION}-fpm" >/dev/null 2>&1 || true
+        fi
+    fi
+
     # Save Redis password to encrypted credentials
     cat > "$CREDENTIALS_DIR/redis-credentials.txt" <<REDIS_CREDS
 Redis Configuration
-Host: $REDIS_HOST
-Port: $REDIS_PORT
+Socket: $REDIS_SOCKET
 Password: $REDIS_PASSWORD
 Max Memory: $REDIS_MEMORY
  Version: 0.0.1
@@ -4956,30 +4966,30 @@ REDIS_CREDS
         log_error "Failed to encrypt Redis credentials"
         exit 1
     }
-    
+
     systemctl restart redis-server
     sleep 2
-    
+
     validate_redis_connection "$REDIS_PASSWORD" || {
         log_error "Redis failed to start properly"
         exit 1
     }
-    
-    log_success "Redis configured with authentication"
+
+    log_success "Redis configured with authentication via socket"
     PHASE_CURRENT=6
 }
 
 phase_php_pools_base() {
     log_section "Phase 7: PHP-FPM Base Configuration"
     set_log_context "Phase-7" "PHP-Pools"
-    
+
     # Remove default www pool
     rm -f /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf 2>/dev/null || true
-    
+
     # Configure session handling
     chown www-data:www-data /var/lib/php/sessions
     chmod 1733 /var/lib/php/sessions
-    
+
     # Configure PHP-FPM global settings
     cat > /etc/php/${PHP_VERSION}/fpm/php-fpm.conf <<PHP_FPM_CONF
 [global]
@@ -5001,12 +5011,12 @@ PHP_FPM_CONF
 
     systemctl restart php${PHP_VERSION}-fpm
     sleep 2
-    
+
     if [[ ! -S /run/php/php${PHP_VERSION}-fpm.sock ]]; then
         log_error "PHP-FPM failed to restart"
         exit 1
     fi
-    
+
     log_success "PHP-FPM base configuration complete"
     PHASE_CURRENT=7
 }
@@ -5014,9 +5024,9 @@ PHP_FPM_CONF
 phase_registries() {
     log_section "Phase 8: Registry Initialization"
     set_log_context "Phase-8" "Registries"
-    
+
     initialize_registries
-    
+
     log_success "Registries initialized with atomic locking"
     PHASE_CURRENT=8
 }
@@ -5024,10 +5034,10 @@ phase_registries() {
 phase_idempotency_lock() {
     log_section "Phase 9: Idempotency Protection"
     set_log_context "Phase-9" "Idempotency"
-    
+
     # Create initialization marker
     touch "$INITIALIZED_FLAG"
-    
+
     # Create installation record
     cat > "$INSTALL_RECORD_FILE" <<INIT_INFO
 ${INSTALLER_NAME} v${INSTALLER_VERSION} - ${INSTALLER_EDITION}
@@ -5047,29 +5057,29 @@ INIT_INFO
 
     chmod 600 "$INSTALL_RECORD_FILE"
     install_cli_wrapper
-    
+
     log_success "Installation record created"
     log_audit "INSTALLATION_COMPLETE" "version=$INSTALLER_VERSION php=$PHP_VERSION"
-    
+
     PHASE_CURRENT=9
 }
 
 phase_nginx_microcache() {
     log_section "Phase 10: Nginx Micro-Cache"
     set_log_context "Phase-10" "Cache"
-    
+
     mkdir -p /var/cache/nginx/microcache
     chown -R www-data:www-data /var/cache/nginx
     chmod -R 755 /var/cache/nginx
 
     write_microcache_config
-    
+
     if nginx -t >/dev/null 2>&1; then
         systemctl reload nginx >/dev/null 2>&1 || true
     else
         log_warn "Nginx config invalid after cache configuration"
     fi
-    
+
     log_success "Cache infrastructure configured"
     PHASE_CURRENT=10
 }
@@ -5077,7 +5087,7 @@ phase_nginx_microcache() {
 phase_wordpress_cron() {
     log_section "Phase 11: WordPress Cron System"
     set_log_context "Phase-11" "Cron"
-    
+
     cat > "$CRON_RUNNER_SCRIPT" <<'WP_CRON'
 #!/bin/bash
 set -euo pipefail
@@ -5101,7 +5111,7 @@ domains=$(jq -r ".domains | keys[]" "$registry" 2>/dev/null || echo "")
 for domain in $domains; do
     wp_root="/var/www/$domain/public"
     [[ ! -d "$wp_root" ]] && continue
-    
+
     if [[ -f "$wp_root/wp-cron.php" ]]; then
         # Verify checksum to prevent executing malicious code
         if php -l "$wp_root/wp-cron.php" >/dev/null 2>&1; then
@@ -5113,7 +5123,7 @@ done
 WP_CRON
 
     chmod +x "$CRON_RUNNER_SCRIPT"
-    
+
     cat > "$CRON_WORDPRESS_FILE" <<WP_CRON_JOB
 */5 * * * * root $CRON_RUNNER_SCRIPT >/dev/null 2>&1
 WP_CRON_JOB
@@ -5121,7 +5131,7 @@ WP_CRON_JOB
     chmod 644 "$CRON_WORDPRESS_FILE"
 
     install_auto_tune_cron
-    
+
     log_success "Cron system configured with security checks"
     PHASE_CURRENT=11
 }
@@ -5129,7 +5139,7 @@ WP_CRON_JOB
 phase_logrotate() {
     log_section "Phase 12: Log Rotation"
     set_log_context "Phase-12" "Logrotate"
-    
+
     cat > "$LOGROTATE_CONFIG" <<'LOGROTATE_CONFIG'
 /var/log/nginx/*.log {
     daily
@@ -5181,7 +5191,7 @@ phase_logrotate() {
 LOGROTATE_CONFIG
 
     chmod 644 "$LOGROTATE_CONFIG"
-    
+
     log_success "Log rotation configured"
     PHASE_CURRENT=12
 }
@@ -5189,7 +5199,7 @@ LOGROTATE_CONFIG
 phase_automated_backups() {
     log_section "Phase 13: Encrypted Backup System"
     set_log_context "Phase-13" "Backups"
-    
+
     cat > "$CRON_BACKUP_SCRIPT" <<'BACKUP_SCRIPT'
 #!/bin/bash
 set -euo pipefail
@@ -5238,25 +5248,25 @@ for db in $databases; do
     timestamp=$(date +%Y%m%d-%H%M%S)
     backup_file="$BACKUP_DIR/${db}-${timestamp}.sql.gz"
     encrypted_file="${backup_file}.enc"
-    
+
     # Dump database
     if mysqldump $MYSQL_SOCKET_ARG --single-transaction --quick --lock-tables=false \
         "$db" 2>/dev/null | gzip > "$backup_file"; then
-        
+
         # Verify backup integrity
         if gzip -t "$backup_file" 2>/dev/null; then
-            
+
             # Encrypt backup
             if [[ -f "$BACKUP_KEY" ]]; then
                 if openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
                     -in "$backup_file" \
                     -out "$encrypted_file" \
                     -pass file:"$BACKUP_KEY" 2>/dev/null; then
-                    
+
                     # Securely delete unencrypted backup
                     shred -u -n 3 "$backup_file" 2>/dev/null
                     chmod 400 "$encrypted_file"
-                    
+
                     log "Backup created and encrypted: $db"
                     ((++backup_count))
                 else
@@ -5289,13 +5299,13 @@ log "Backup completed: $backup_count successful, $error_count failed"
 BACKUP_SCRIPT
 
     chmod +x "$CRON_BACKUP_SCRIPT"
-    
+
     cat > "$CRON_BACKUP_FILE" <<BACKUP_CRON
 0 2 * * * root $CRON_BACKUP_SCRIPT >/dev/null 2>&1
 BACKUP_CRON
 
     chmod 644 "$CRON_BACKUP_FILE"
-    
+
     log_success "Encrypted backup system configured"
     PHASE_CURRENT=13
 }
@@ -5303,7 +5313,7 @@ BACKUP_CRON
 phase_security_hardening() {
     log_section "Phase 14: Security Baseline"
     set_log_context "Phase-14" "Security"
-    
+
     # Configure fail2ban for SSH and Nginx
     if command -v fail2ban-client &>/dev/null; then
         cat > /etc/fail2ban/jail.local <<'FAIL2BAN'
@@ -5332,25 +5342,25 @@ FAIL2BAN
         systemctl restart fail2ban 2>/dev/null || true
         log_success "fail2ban configured"
     fi
-    
+
     # Configure UFW firewall (preserve existing rules)
     configure_firewall_preserve || log_warn "UFW firewall configuration skipped"
 
     # Apply conservative sysctl performance tuning
     apply_sysctl_tuning
-    
+
     # Secure shared memory
     if ! grep -q "tmpfs /run/shm tmpfs" /etc/fstab 2>/dev/null; then
         echo "tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0" >> /etc/fstab
         log_success "Shared memory secured"
     fi
-    
+
     # Disable unnecessary services
     for service in avahi-daemon cups bluetooth; do
         systemctl disable "$service" 2>/dev/null || true
         systemctl stop "$service" 2>/dev/null || true
     done
-    
+
     log_success "Security baseline applied"
     PHASE_CURRENT=14
 }
@@ -5358,7 +5368,7 @@ FAIL2BAN
 phase_system_cleanup() {
     log_section "Phase 15: System Cleanup"
     set_log_context "Phase-15" "Cleanup"
-    
+
     # Clean package cache
     apt-get clean >/dev/null 2>&1 || true
     apt-get autoclean >/dev/null 2>&1 || true
@@ -5367,14 +5377,14 @@ phase_system_cleanup() {
     else
         log_info "Skipping autoremove (conservative cleanup)"
     fi
-    
+
     # Clean temporary files (SAFE - not /tmp/*)
     find /tmp -name "wp-*" -type f -mtime +1 -delete 2>/dev/null || true
     find /var/tmp -name "wp-*" -type f -mtime +1 -delete 2>/dev/null || true
-    
+
     # Clean old log files
     find /var/log -type f -name "*.log.*" -mtime +30 -delete 2>/dev/null || true
-    
+
     log_success "System cleanup completed"
     PHASE_CURRENT=15
 }
@@ -5382,12 +5392,12 @@ phase_system_cleanup() {
 phase_health_check() {
     log_section "Phase 16: Comprehensive Health Check"
     set_log_context "Phase-16" "Health-Check"
-    
+
     local checks_passed=0
     local checks_total=0
     local critical_failed=false
     [[ -z "$MYSQL_SOCKET" ]] && detect_mysql_socket >/dev/null 2>&1 || true
-    
+
     # Check 0: Dependencies
     ((++checks_total))
     if check_dependencies >/dev/null 2>&1; then
@@ -5397,7 +5407,7 @@ phase_health_check() {
         log_error "Missing dependencies"
         critical_failed=true
     fi
-    
+
     # Check 1: Service Status
     for service in nginx mariadb redis-server php${PHP_VERSION}-fpm; do
         ((++checks_total))
@@ -5409,7 +5419,7 @@ phase_health_check() {
             critical_failed=true
         fi
     done
-    
+
     # Check 2: MySQL Connectivity
     ((++checks_total))
     if mysql_exec "SELECT 1;" >/dev/null 2>&1; then
@@ -5419,7 +5429,7 @@ phase_health_check() {
         log_error "MySQL connection FAILED"
         critical_failed=true
     fi
-    
+
     # Check 3: MySQL Performance
     ((++checks_total))
     local mysql_response_time=$(mysql_exec "SELECT BENCHMARK(100000, SHA1('test'));" 2>/dev/null | tail -1 | awk '{print $1}')
@@ -5429,11 +5439,11 @@ phase_health_check() {
     else
         log_warn "MySQL performance test failed"
     fi
-    
+
     # Check 4: Redis Connectivity
     ((++checks_total))
     if [[ -n "$REDIS_PASSWORD" ]]; then
-        if redis-cli -a "$REDIS_PASSWORD" PING 2>/dev/null | grep -q "PONG"; then
+        if redis-cli -s "$REDIS_SOCKET" -a "$REDIS_PASSWORD" PING 2>/dev/null | grep -q "PONG"; then
             log_success "Redis authentication working"
             ((++checks_passed))
         else
@@ -5441,11 +5451,11 @@ phase_health_check() {
             critical_failed=true
         fi
     fi
-    
+
     # Check 5: Redis Performance
     ((++checks_total))
     if [[ -n "$REDIS_PASSWORD" ]]; then
-        local redis_latency=$(redis-cli -a "$REDIS_PASSWORD" --latency -i 1 -c 10 2>/dev/null | awk '{print int($NF)}' || echo "999")
+        local redis_latency=$(redis-cli -s "$REDIS_SOCKET" -a "$REDIS_PASSWORD" --latency -i 1 -c 10 2>/dev/null | awk '{print int($NF)}' || echo "999")
         if [[ "$redis_latency" -lt 10 ]]; then
             log_success "Redis latency acceptable (${redis_latency}ms)"
             ((++checks_passed))
@@ -5453,7 +5463,7 @@ phase_health_check() {
             log_warn "Redis latency high (${redis_latency}ms)"
         fi
     fi
-    
+
     # Check 6: PHP-FPM Socket
     ((++checks_total))
     if [[ -S /run/php/php${PHP_VERSION}-fpm.sock ]]; then
@@ -5463,7 +5473,7 @@ phase_health_check() {
         log_error "PHP-FPM socket NOT found"
         critical_failed=true
     fi
-    
+
     # Check 7: Nginx Configuration
     ((++checks_total))
     if nginx -t >/dev/null 2>&1; then
@@ -5501,7 +5511,7 @@ phase_health_check() {
             fi
         fi
     fi
-    
+
     # Check 8: Disk Space
     ((++checks_total))
     local disk_usage=$(df / | awk 'NR==2 {print $5}' | sed 's/%//')
@@ -5511,7 +5521,7 @@ phase_health_check() {
     else
         log_warn "Disk space low (${disk_usage}% used)"
     fi
-    
+
     # Check 9: Memory Available
     ((++checks_total))
     local mem_available=$(free -m | awk 'NR==2 {print $7}')
@@ -5521,7 +5531,7 @@ phase_health_check() {
     else
         log_warn "Low memory (${mem_available}MB free)"
     fi
-    
+
     # Check 10: Encryption Keys
     ((++checks_total))
     if [[ -f "$MASTER_KEY_FILE" ]] && [[ -f "$BACKUP_KEY_FILE" ]]; then
@@ -5530,13 +5540,13 @@ phase_health_check() {
     else
         log_error "Encryption keys MISSING"
     fi
-    
+
     # Summary
     echo ""
     echo "--------------------------------------------------------------"
     echo "Health Check Summary: $checks_passed/$checks_total checks passed"
     echo "--------------------------------------------------------------"
-    
+
     if [[ "$critical_failed" == "true" ]]; then
         log_error "Critical health checks FAILED"
         return 1
@@ -5552,11 +5562,11 @@ phase_health_check() {
 phase_summary() {
     log_section "Phase 17: Installation Complete"
     set_log_context "Phase-17" "Summary"
-    
+
     local total_time=$(($(date +%s) - SCRIPT_START_TIME))
     local minutes=$((total_time / 60))
     local seconds=$((total_time % 60))
-    
+
     echo ""
     echo "======================================================================"
     echo "INSTALLATION SUCCESSFUL"
@@ -5645,7 +5655,7 @@ phase_summary() {
     echo "  2. Configure DNS to point to this server"
     echo "  3. Obtain SSL certificate with: certbot --nginx -d example.com"
     echo ""
-    
+
     PHASE_CURRENT=17
 }
 
@@ -6624,14 +6634,14 @@ create_site() {
     local admin_email_raw=${3:-}
     local admin_user_raw=${4:-}
     local enable_ssl_raw=${5:-}
-    
+
     # Validate inputs
     local domain
     domain=$(validate_domain "$domain_raw") || {
         log_error "Invalid domain: $domain_raw"
         return 1
     }
-    
+
     [[ -z "$site_title_raw" ]] && site_title_raw="$domain"
     if [[ -z "$admin_email_raw" ]] && [[ "$site_title_raw" == *"@"* ]]; then
         admin_email_raw="$site_title_raw"
@@ -6642,13 +6652,13 @@ create_site() {
         log_error "Invalid site title"
         return 1
     }
-    
+
     local admin_email
     admin_email=$(validate_email "$admin_email_raw") || {
         log_error "Invalid admin email"
         return 1
     }
-    
+
     log_section "Creating WordPress Site: $domain"
     set_log_context "CREATE_SITE" "$domain"
 
@@ -6673,12 +6683,12 @@ create_site() {
     fi
 
     detect_cache_purge_support
-    
+
     # Load system resources if not already loaded
     detect_php_version || return 1
     calculate_system_resources >/dev/null 2>&1
     detect_mysql_socket >/dev/null 2>&1 || true
-    
+
     if [[ -z "$REDIS_PASSWORD" ]]; then
         if [[ -f "$CREDENTIALS_DIR/redis-credentials.txt.enc" ]]; then
             decrypt_credentials "$CREDENTIALS_DIR/redis-credentials.txt.enc" || {
@@ -6690,7 +6700,7 @@ create_site() {
         fi
     fi
     [[ -z "$PHP_VERSION" ]] && calculate_system_resources >/dev/null 2>&1
-    
+
     # Load Redis password if not in memory
     if [[ -z "$REDIS_PASSWORD" ]]; then
         if [[ -f "$CREDENTIALS_DIR/redis-credentials.txt.enc" ]]; then
@@ -6702,17 +6712,17 @@ create_site() {
             shred -u -n 3 "$CREDENTIALS_DIR/redis-credentials.txt" 2>/dev/null
         fi
     fi
-    
+
     # Check if domain already exists
     if jq -e ".domains[\"$domain\"]" "$REGISTRY_FILE" >/dev/null 2>&1; then
         log_error "Domain already exists: $domain"
         log_security "DUPLICATE_DOMAIN" "Attempt to create existing domain: $domain"
         return 1
     fi
-    
+
     # Initialize rollback stack
     ROLLBACK_STACK=()
-    
+
     # Allocate Redis database
     log_info "Allocating Redis database..."
     local redis_db
@@ -6722,14 +6732,14 @@ create_site() {
         return 1
     }
     push_rollback "redis_release_db '$domain'"
-    
+
     # Generate database credentials
     log_info "Generating database credentials..."
     local db_name=$(sanitize_db_name "$domain")
     local db_user=$(sanitize_db_user "$domain")
     local db_pass=$(generate_secure_password 32)
     local admin_pass=$(generate_secure_password 20)
-    
+
     # Create MySQL database
     log_info "Creating MySQL database..."
     if ! mysql_exec "CREATE DATABASE IF NOT EXISTS \`$db_name\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null; then
@@ -6738,39 +6748,39 @@ create_site() {
         return 1
     fi
     push_rollback "mysql_exec \"DROP DATABASE IF EXISTS \\\`$db_name\\\`;\" 2>/dev/null || true"
-    
+
     # Create MySQL user with limited privileges
     log_info "Creating MySQL user..."
     mysql_exec "CREATE USER IF NOT EXISTS '$db_user'@'localhost' IDENTIFIED BY '$db_pass';" 2>/dev/null || true
     mysql_exec "GRANT ALL PRIVILEGES ON \`$db_name\`.* TO '$db_user'@'localhost';" 2>/dev/null
     mysql_exec "FLUSH PRIVILEGES;" 2>/dev/null
     push_rollback "mysql_exec \"DROP USER IF EXISTS '$db_user'@'localhost';\" 2>/dev/null || true"
-    
+
     # Create site directory structure
     log_info "Creating site directories..."
     local site_dir="$SITES_DIR/$domain"
     local site_tmp="$site_dir/tmp"
-    
+
     mkdir -p "$site_dir"/{public,logs,backups,tmp}
     touch "$site_dir/.dazestack-wp-site" 2>/dev/null || true
     push_rollback "safe_cleanup '$site_dir'"
-    
+
     # Set ownership and permissions
     chown -R www-data:www-data "$site_dir"
     chmod -R 755 "$site_dir"
     chmod 1733 "$site_tmp"  # Sticky bit for tmp
-    
+
     # Create PHP-FPM pool
     log_info "Creating PHP-FPM pool..."
     local pool_name="${domain//./_}"
     local php_socket="/run/php/php${PHP_VERSION}-${pool_name}.sock"
-    
+
     local total_sites=$(( $(get_total_sites) + 1 ))
     read -r site_max_children site_start site_min site_max < <(calculate_pool_limits "$total_sites")
     write_php_pool_config "$pool_name" "$site_dir" "$site_tmp" "$site_max_children" "$site_start" "$site_min" "$site_max"
 
     push_rollback "rm -f '/etc/php/${PHP_VERSION}/fpm/pool.d/${pool_name}.conf'"
-    
+
     # Reload PHP-FPM
     systemctl reload php${PHP_VERSION}-fpm || {
         log_error "Failed to reload PHP-FPM"
@@ -6778,14 +6788,14 @@ create_site() {
         return 1
     }
     sleep 2
-    
+
     # Verify PHP-FPM socket
     if [[ ! -S "$php_socket" ]]; then
         log_error "PHP-FPM socket not created: $php_socket"
         execute_rollback
         return 1
     fi
-    
+
     # Install WordPress (automated)
     log_info "Installing WordPress core..."
     ensure_wp_cli || {
@@ -6793,19 +6803,19 @@ create_site() {
         execute_rollback
         return 1
     }
-    
+
     local wp_path="$site_dir/public"
 
     local db_host
     db_host=$(mysql_host_for_wp)
     [[ -z "$db_host" ]] && db_host="localhost"
-    
+
     run_wp_cli "$wp_path" core download --force || {
         log_error "WordPress download failed"
         execute_rollback
         return 1
     }
-    
+
     run_wp_cli "$wp_path" config create \
         --dbname="$db_name" \
         --dbuser="$db_user" \
@@ -6818,7 +6828,7 @@ create_site() {
         execute_rollback
         return 1
     }
-    
+
     run_wp_cli "$wp_path" core install \
         --url="$domain" \
         --title="$site_title" \
@@ -6840,7 +6850,7 @@ create_site() {
     fi
     run_wp_cli "$wp_path" config set WP_DEBUG_DISPLAY false --raw || log_warn "Failed to set WP_DEBUG_DISPLAY"
     run_wp_cli "$wp_path" config set WP_DEBUG_LOG false --raw || log_warn "Failed to set WP_DEBUG_LOG"
-    
+
     # Core security and performance settings
     run_wp_cli "$wp_path" config set DISABLE_WP_CRON true --raw
     run_wp_cli "$wp_path" config set WP_CACHE true --raw
@@ -6849,13 +6859,21 @@ create_site() {
     run_wp_cli "$wp_path" config set FS_METHOD direct
     run_wp_cli "$wp_path" config set WP_ENVIRONMENT_TYPE production
     run_wp_cli "$wp_path" config set WP_CACHE_KEY_SALT "${domain}:"
-    
+
     # Redis object cache integration
-    run_wp_cli "$wp_path" config set WP_REDIS_HOST "$REDIS_HOST"
-    run_wp_cli "$wp_path" config set WP_REDIS_PORT "$REDIS_PORT" --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_SCHEME "unix"
+    run_wp_cli "$wp_path" config set WP_REDIS_PATH "$REDIS_SOCKET"
     run_wp_cli "$wp_path" config set WP_REDIS_PASSWORD "$REDIS_PASSWORD"
     run_wp_cli "$wp_path" config set WP_REDIS_DATABASE "$redis_db" --raw
     run_wp_cli "$wp_path" config set WP_REDIS_PREFIX "${domain//./_}:"
+
+    # Steroids flags
+    run_wp_cli "$wp_path" config set WP_REDIS_ASYNC_FLUSH true --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_DISABLE_METRICS true --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_DISABLE_BANNERS true --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_TIMEOUT 1 --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_READ_TIMEOUT 1 --raw
+
     run_wp_cli "$wp_path" plugin install redis-cache --activate
     run_wp_cli "$wp_path" redis enable || true
 
@@ -6872,10 +6890,10 @@ create_site() {
     if [[ "$ENABLE_CDN" == "true" ]]; then
         ensure_cdn_mu_plugin "$wp_path" || log_warn "Failed to install CDN MU plugin"
     fi
-    
+
     chown -R www-data:www-data "$site_dir"
     chmod 640 "$wp_path/wp-config.php" 2>/dev/null || true
-    
+
     # Create Nginx vhost with secure defaults
     log_info "Creating Nginx configuration..."
     write_microcache_config
@@ -6925,7 +6943,7 @@ server {
     server_name $server_names;
     root $site_dir/public;
     index index.php index.html;
-    
+
     access_log $site_dir/logs/access.log combined;
     error_log $site_dir/logs/error.log warn;
 
@@ -6980,7 +6998,7 @@ server {
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         fastcgi_param PATH_INFO \$fastcgi_path_info;
-        
+
         # FastCGI cache
         fastcgi_cache wordpress_cache;
         fastcgi_cache_methods GET HEAD;
@@ -7007,36 +7025,36 @@ $purge_block
 NGINX_VHOST
 
     push_rollback "rm -f '/etc/nginx/sites-available/$domain.conf' '/etc/nginx/sites-enabled/$domain.conf'"
-    
+
     # Enable site
     ln -sf "/etc/nginx/sites-available/$domain.conf" "/etc/nginx/sites-enabled/$domain.conf"
-    
+
     # Test Nginx configuration
     if ! validate_nginx_config_or_recover_modules "Nginx configuration test failed"; then
         execute_rollback
         return 1
     fi
-    
+
     # Reload Nginx
     systemctl reload nginx || {
         log_error "Failed to reload Nginx"
         execute_rollback
         return 1
     }
-    
+
     # Register domain in registry
     domain_register "$domain" "$redis_db" "$pool_name" "$db_name" "$db_user" "$site_title" "$admin_email" || {
         log_error "Failed to register domain"
         execute_rollback
         return 1
     }
-    
+
     if [[ "$enable_ssl_flag" == "true" ]]; then
         enable_ssl_for_site "$domain" "$admin_email" || log_warn "Auto SSL failed for $domain"
     fi
 
     rebalance_php_pools || log_warn "Failed to rebalance PHP-FPM pools"
-    
+
     # Save credentials (encrypted)
     log_info "Saving encrypted credentials..."
     cat > "$CREDENTIALS_DIR/${domain}-credentials.txt" <<SITE_CREDS
@@ -7060,8 +7078,7 @@ Database Socket: $MYSQL_SOCKET
 
 Redis Configuration:
 Redis DB: $redis_db
-Redis Host: $REDIS_HOST
-Redis Port: $REDIS_PORT
+Redis Socket: $REDIS_SOCKET
 Redis Password: $REDIS_PASSWORD
 
 Site Configuration:
@@ -7080,10 +7097,10 @@ SITE_CREDS
         # Don't rollback - site is created, just warn user
         log_warn "Credentials saved in PLAIN TEXT - manual encryption required"
     }
-    
+
     # Clear rollback stack (success)
     ROLLBACK_STACK=()
-    
+
     # Success message
     echo ""
     log_success "--------------------------------------------------------------"
@@ -7106,6 +7123,7 @@ SITE_CREDS
     echo ""
     echo "Redis Cache:"
     echo "  Database: $redis_db"
+    echo "  Socket: $REDIS_SOCKET"
     echo ""
     echo "Next Steps:"
     echo "  1. Configure DNS to point $domain to this server"
@@ -7116,39 +7134,39 @@ SITE_CREDS
     echo "  3. View credentials (decrypted):"
     echo "     $SCRIPT_NAME show-credentials $domain"
     echo ""
-    
+
     log_audit "SITE_CREATED" "domain=$domain db=$db_name redis_db=$redis_db admin_email=$admin_email"
-    
+
     return 0
 }
 
 delete_site() {
     local domain_raw=$1
-    
+
     # Validate domain input
     local domain
     domain=$(validate_domain "$domain_raw") || {
         log_error "Invalid domain: $domain_raw"
         return 1
     }
-    
+
     detect_php_version || return 1
     detect_mysql_socket >/dev/null 2>&1 || true
-    
+
     log_section "Deleting WordPress Site: $domain"
     set_log_context "DELETE_SITE" "$domain"
-    
+
     # Check if domain exists
     if ! jq -e ".domains[\"$domain\"]" "$REGISTRY_FILE" >/dev/null 2>&1; then
         log_error "Domain not found: $domain"
         return 1
     fi
-    
+
     # Get site details from registry
     local db_name=$(jq -r ".domains[\"$domain\"].db_name" "$REGISTRY_FILE")
     local db_user=$(jq -r ".domains[\"$domain\"].db_user" "$REGISTRY_FILE")
     local pool_name=$(jq -r ".domains[\"$domain\"].php_pool" "$REGISTRY_FILE")
-    
+
     # Confirmation prompt
     echo ""
     echo "WARNING: This will permanently delete:"
@@ -7159,12 +7177,12 @@ delete_site() {
     echo "  - PHP-FPM pool"
     echo ""
     read -p "Type 'DELETE' to confirm deletion: " confirm
-    
+
     if [[ "$confirm" != "DELETE" ]]; then
         log_warn "Deletion cancelled by user"
         return 0
     fi
-    
+
     # Create final backup before deletion
     log_info "Creating final backup..."
     local backup_file="$BACKUP_DIR/${db_name}-deletion-$(date +%s).sql.gz"
@@ -7185,43 +7203,43 @@ delete_site() {
     else
         log_warn "Failed to create final backup"
     fi
-    
+
     # Drop MySQL database and user
     log_info "Dropping MySQL database and user..."
     mysql_exec "DROP DATABASE IF EXISTS \`$db_name\`;" 2>/dev/null || log_warn "Failed to drop database"
     mysql_exec "DROP USER IF EXISTS '$db_user'@'localhost';" 2>/dev/null || log_warn "Failed to drop user"
     mysql_exec "FLUSH PRIVILEGES;" 2>/dev/null || true
-    
+
     # Release Redis database
     redis_release_db "$domain" || log_warn "Failed to release Redis database"
-    
+
     # Remove PHP-FPM pool
     log_info "Removing PHP-FPM pool..."
     rm -f "/etc/php/${PHP_VERSION}/fpm/pool.d/${pool_name}.conf"
     systemctl reload php${PHP_VERSION}-fpm 2>/dev/null || log_warn "Failed to reload PHP-FPM"
-    
+
     # Remove Nginx configuration
     log_info "Removing Nginx configuration..."
     rm -f "/etc/nginx/sites-available/$domain.conf"
     rm -f "/etc/nginx/sites-enabled/$domain.conf"
-    
+
     if validate_nginx_config_or_recover_modules "Nginx configuration invalid after site removal"; then
         systemctl reload nginx || log_warn "Failed to reload Nginx"
     fi
-    
+
     # Remove site files
     log_info "Removing site files..."
     safe_cleanup "$SITES_DIR/$domain" || log_warn "Failed to remove site directory"
-    
+
     # Remove credentials
     rm -f "$CREDENTIALS_DIR/${domain}-credentials.txt.enc"
     rm -f "$CREDENTIALS_DIR/${domain}-credentials.txt"
-    
+
     # Unregister domain
     domain_unregister "$domain" || log_warn "Failed to unregister domain"
-    
+
     rebalance_php_pools || log_warn "Failed to rebalance PHP-FPM pools"
-    
+
     echo ""
     log_success "--------------------------------------------------------------"
     log_success "WordPress site deleted successfully!"
@@ -7230,68 +7248,68 @@ delete_site() {
     echo "Deleted: $domain"
     echo "Final backup: ${backup_file}.enc (if successful)"
     echo ""
-    
+
     log_audit "SITE_DELETED" "domain=$domain db=$db_name"
-    
+
     return 0
 }
 
 list_sites() {
     log_section "Registered WordPress Sites"
     set_log_context "LIST_SITES"
-    
+
     local registry="$REGISTRY_FILE"
-    
+
     if [[ ! -f "$registry" ]]; then
         echo "Registry not found"
         return 1
     fi
-    
+
     local total=$(jq -r '.metadata.total // 0' "$registry" 2>/dev/null)
-    
+
     if [[ $total -eq 0 ]]; then
         echo "No sites registered"
         return 0
     fi
-    
+
     echo ""
     echo "Total Sites: $total"
     echo ""
     echo "--------------------------------------------------------------"
-    
-    jq -r '.domains | to_entries[] | 
+
+    jq -r '.domains | to_entries[] |
         "Domain: \(.key)\n  Site Title: \(.value.site_title // "n/a")\n  Admin Email: \(.value.admin_email // "n/a")\n  Redis DB: \(.value.redis_db)\n  PHP Pool: \(.value.php_pool)\n  Database: \(.value.db_name)\n  CDN: \(.value.cdn_enabled // false)\n  CDN URL: \(.value.cdn_url // "n/a")\n  CDN Provider: \(.value.cdn_provider // "n/a")\n  Status: \(.value.status)\n  Created: \(.value.created_at | strflocaltime("%Y-%m-%d %H:%M:%S"))\n"' \
         "$registry" 2>/dev/null || echo "Error reading registry"
-    
+
     echo "--------------------------------------------------------------"
     echo ""
 }
 
 show_credentials() {
     local domain_raw=$1
-    
+
     # Validate domain input
     local domain
     domain=$(validate_domain "$domain_raw") || {
         log_error "Invalid domain: $domain_raw"
         return 1
     }
-    
+
     local cred_file="$CREDENTIALS_DIR/${domain}-credentials.txt.enc"
-    
+
     if [[ ! -f "$cred_file" ]]; then
         log_error "Credentials not found for domain: $domain"
         return 1
     fi
-    
+
     log_info "Decrypting credentials for $domain..."
-    
+
     # Decrypt and display
     decrypt_credentials "$cred_file" || {
         log_error "Failed to decrypt credentials"
         return 1
     }
-    
+
     echo ""
     echo "--------------------------------------------------------------"
     cat "$CREDENTIALS_DIR/${domain}-credentials.txt"
@@ -7299,10 +7317,10 @@ show_credentials() {
     echo ""
     echo "NOTE: Credentials will be automatically deleted in 60 seconds"
     echo ""
-    
+
     # Auto-delete plaintext after 60 seconds
     (sleep 60 && shred -u -n 3 "$CREDENTIALS_DIR/${domain}-credentials.txt" 2>/dev/null) &
-    
+
     log_audit "CREDENTIALS_VIEWED" "domain=$domain"
 }
 
@@ -7684,7 +7702,7 @@ run_full_install() {
     echo "Website: $INSTALLER_WEBSITE"
     echo "Email: $INSTALLER_EMAIL"
     echo ""
-    
+
     LOG_FILE_OUTPUT_ENABLED=true
     ensure_log_dir || true
 
@@ -7696,7 +7714,7 @@ run_full_install() {
     check_prior_initialization
     initialize_directories
     initialize_master_keys
-    
+
     # Installation phases
     phase_system_prerequisites
     phase_php_installation
@@ -7808,7 +7826,7 @@ flush_redis_object_cache_all_sites() {
     fi
     local db
     for db in $redis_dbs; do
-        redis-cli -a "$REDIS_PASSWORD" -n "$db" FLUSHDB >/dev/null 2>&1 || true
+        redis-cli -s "$REDIS_SOCKET" -a "$REDIS_PASSWORD" -n "$db" FLUSHDB >/dev/null 2>&1 || true
     done
     log_success "Redis object caches flushed for all WordPress sites"
     return 0
@@ -9202,9 +9220,9 @@ main() {
     # CLI entry point with command dispatch and optional interactive menu.
     # Ensure log directory exists
     mkdir -p "$LOG_DIR" "$STATE_DIR" 2>/dev/null || true
-    
+
     local command=${1:-}
-    
+
     case "$command" in
         create-site)
             # Site creation command
@@ -9265,7 +9283,7 @@ main() {
                 exit 1
             fi
             ;;
-            
+
         delete-site)
             # Site deletion command
             [[ ! -f "$INITIALIZED_FLAG" ]] && {
@@ -9277,7 +9295,7 @@ main() {
                 exit 1
             fi
             ;;
-            
+
         list-sites)
             # List sites command
             [[ ! -f "$INITIALIZED_FLAG" ]] && {
@@ -9286,7 +9304,7 @@ main() {
             }
             list_sites
             ;;
-            
+
         show-credentials)
             # Show credentials command
             [[ ! -f "$INITIALIZED_FLAG" ]] && {
@@ -9296,7 +9314,7 @@ main() {
             check_root
             show_credentials "${2:-}"
             ;;
-            
+
         health-check)
             # Health check command
             if ! run_health_check; then
@@ -9356,7 +9374,7 @@ main() {
             calculate_system_resources >/dev/null 2>&1
             rebalance_php_pools
             ;;
-        
+
         update-cloudflare-ips)
             # Update Cloudflare IP allowlist
             check_root
@@ -9491,7 +9509,7 @@ main() {
                 systemctl restart nginx >/dev/null 2>&1 || true
             fi
             ;;
-        
+
         nginx-auto-update)
             check_root
             local action="${2:-}"
@@ -9500,7 +9518,7 @@ main() {
                 --disable) disable_nginx_auto_update ;;
                 --status) nginx_auto_update_status ;;
                 --run) run_nginx_auto_update ;;
-                *) 
+                *)
                     log_error "Usage: nginx-auto-update --enable|--disable|--run|--status"
                     exit 1
                     ;;
@@ -9628,17 +9646,17 @@ main() {
             check_root
             refresh_installation "${2:-}"
             ;;
-        
+
         list-features)
             show_features
             exit 0
             ;;
-            
+
         help|--help|-h)
             show_help
             exit 0
             ;;
-            
+
         "")
             if is_interactive; then
                 menu_loop
@@ -9646,7 +9664,7 @@ main() {
                 run_full_install
             fi
             ;;
-            
+
         *)
             log_error "Unknown command: $command"
             echo ""
@@ -9661,7 +9679,3 @@ trap 'on_error $LINENO "$BASH_COMMAND" $?' ERR
 
 # Run main function with all arguments
 main "$@"
-
-
-
-
