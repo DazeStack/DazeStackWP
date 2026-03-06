@@ -5141,7 +5141,7 @@ phase_logrotate() {
     create 0640 www-data adm
     sharedscripts
     postrotate
-        [ -f /var/run/nginx.pid ] && kill -USR1 `cat /var/run/nginx.pid` 2>/dev/null || true
+        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid) 2>/dev/null || true
     endscript
 }
 
