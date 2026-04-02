@@ -9711,7 +9711,9 @@ main() {
 trap 'on_error $LINENO "$BASH_COMMAND" $?' ERR
 
 # Run main function with all arguments
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
 
 
 
