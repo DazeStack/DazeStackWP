@@ -1,7 +1,7 @@
 # DazeStack WP - Current Audit Report
 
 Audit date: February 13, 2026
-Script line: `v0.0.1 (Core)` + latest maintenance patches
+Script line: `v0.1.0 (Core)` + latest maintenance patches
 Scope: `dazestack-wp.sh` behavior and operational docs currently in this repository
 
 ## Executive Summary
@@ -103,7 +103,7 @@ Use `CHANGELOG.md` as the canonical version timeline.
 
 - `pre-0.0.1`: legacy audit snapshot context only
 - `0.0.1`: first stable documented release line
-- `Unreleased (2026-02-13)`: cache purge strictness + pipeline-status fix + doc refresh
+- `0.1.0 (2026-09-04)`: Ubuntu 26.04/24.04 LTS certified, multi-gigabit kernel stack, OpenSSL 3.4+, Post-Quantum TLS 1.3, Systemd overrides, MariaDB 11.4 LTS, Redis LTS with Unix socket
 
 ## Final Assessment
 

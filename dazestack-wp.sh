@@ -10,7 +10,7 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 
 ################################################################################
-# DazeStack WP v0.0.1
+# DazeStack WP v0.1.0
 # Tagline: Laze while your WordPress stack builds itself.
 # Series: DazeStack - tools that let you laze while the code does the work.
 # Description: Production-ready, fully automated WordPress LEMP platform with per-site
@@ -32,7 +32,7 @@ INSTALLER_NAME="DazeStack WP"
 INSTALLER_TAGLINE="Laze while your WordPress stack builds itself."
 INSTALLER_SERIES="DazeStack"
 INSTALLER_DESCRIPTION="Production-ready, fully automated WordPress LEMP platform. The idea was to automate and make it full fledged as much as possible."
-INSTALLER_VERSION="0.0.1"
+INSTALLER_VERSION="0.1.0"
 INSTALLER_EDITION="Core"
 INSTALLER_AUTHOR="Ashish Dungdung"
 INSTALLER_WEBSITE="https://ashishdungdung.com"
@@ -997,7 +997,7 @@ initialize_registries() {
     
     cat > "$REGISTRY_FILE" <<DOMAIN_REG
 {
-  "version": "0.0.1",
+  "version": "0.1.0",
   "domains": {},
   "metadata": {
     "total": 0,
@@ -1016,7 +1016,7 @@ DOMAIN_REG
 
     cat > "$STATE_DIR/redis-allocator.json" <<REDIS_ALLOC
 {
-  "version": "0.0.1",
+  "version": "0.1.0",
   "allocations": {},
   "free_databases": $free_dbs_json,
   "metadata": {
@@ -1224,7 +1224,7 @@ domain_register() {
             cdn_updated_at: now,
             created_at: now,
             status: "active",
-            version: "0.0.1"
+            version: "0.1.0"
         } | 
         .metadata.total += 1 |
         .metadata.last_updated = now' \
@@ -4859,7 +4859,7 @@ Host: $REDIS_HOST
 Port: $REDIS_PORT
 Password: $REDIS_PASSWORD
 Max Memory: $REDIS_MEMORY
- Version: 0.0.1
+ Version: $INSTALLER_VERSION
 REDIS_CREDS
 
     encrypt_credentials "$CREDENTIALS_DIR/redis-credentials.txt" || {

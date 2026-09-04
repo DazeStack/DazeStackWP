@@ -5,10 +5,13 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/badge/release-v0.0.1-blue?style=for-the-badge">
-  <img alt="Ubuntu" src="https://img.shields.io/badge/ubuntu-24.04%2B-E95420?style=for-the-badge">
-  <img alt="Nginx" src="https://img.shields.io/badge/nginx-source%20build-009639?style=for-the-badge">
-  <img alt="PHP" src="https://img.shields.io/badge/php-8.5-777BB4?style=for-the-badge">
+  <img alt="Release" src="https://img.shields.io/badge/release-v0.1.0-blue?style=for-the-badge">
+  <img alt="Ubuntu" src="https://img.shields.io/badge/ubuntu-24.04%20%7C%2026.04%20LTS-E95420?style=for-the-badge">
+  <img alt="Nginx" src="https://img.shields.io/badge/nginx-HTTP%2F3%20QUIC-009639?style=for-the-badge&logo=nginx&logoColor=white">
+  <img alt="Post Quantum TLS" src="https://img.shields.io/badge/TLS%201.3-Post--Quantum%20(ML--KEM)-0f766e?style=for-the-badge">
+  <img alt="MariaDB" src="https://img.shields.io/badge/mariadb-11.4%20LTS-C0765A?style=for-the-badge&logo=mariadb&logoColor=white">
+  <img alt="Redis" src="https://img.shields.io/badge/redis-Unix%20Socket%20LTS-dc2626?style=for-the-badge&logo=redis&logoColor=white">
+  <img alt="PHP" src="https://img.shields.io/badge/php-8.4%20%7C%208.5%20JIT-777BB4?style=for-the-badge&logo=php&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/license-AGPLv3%20%2B%20Commercial-black?style=for-the-badge">
 </p>
 
@@ -56,7 +59,7 @@
 
 WordPress setup looks simple until production expectations appear: isolation, caching, SSL, backups, tuning, diagnostics, and repeatable operations.
 
-DazeStack WP reduces manual work by giving you a practical automation baseline for Ubuntu 24.04+.
+DazeStack WP reduces manual work by giving you a practical automation baseline for Ubuntu 24.04 and 26.04 LTS.
 
 - `✅` Provision full WordPress LEMP stacks quickly
 - `✅` Isolate sites to reduce cross-site blast radius
@@ -177,12 +180,15 @@ DazeStack WP ships with multiple performance modules enabled and wired together 
 
 | Layer | What is configured |
 |---|---|
-| Nginx request path | FastCGI microcache zone, cache key strategy, cache lock, stale serving |
+| Nginx request path | Native HTTP/3 QUIC (quic_gso, quic_retry), FastCGI microcache zone, cache lock, stale serving |
 | Cache safety | Bypass maps for cookies, auth headers, request method, query args, cache-control/pragma |
-| Object cache | Per-site Redis DB allocation (DB 1-15, DB 0 reserved) |
-| Compression | gzip baseline + Brotli/Zstd when available, with profile optimizer |
-| Runtime sizing | Auto-calculated worker/process sizing + pool rebalance commands |
-| Network tuning | Sysctl performance profile with optional BBR where available |
+| Object cache | High-throughput Unix domain socket (`/run/redis/redis-server.sock`), per-site DB allocation (DB 1-63, DB 0 fallback) |
+| Compression | Cascading pipeline: Zstandard (primary) -> Brotli (secondary) -> Gzip (fallback) |
+| Runtime sizing | Auto-calculated worker/process sizing + OPcache JIT tracing engine (64MB) for PHP 8.4/8.5 |
+| Kernel & Network tuning | Multi-gigabit sysctl buffers (16MB), BBRv3 / BBR, TCP Fast Open (RFC 7413), PMTU probing, idle persistence |
+| Modern Cryptography | Post-Quantum TLS 1.3 key exchange (`X25519MLKEM768`), OpenSSL 3.4/3.5 support, 8k low-latency SSL buffers |
+| Database layer | MariaDB 11.4 LTS with dynamic redo logging, verified WordPress core compatibility through 2029 |
+| Systemd Sandboxing | Drop-in unit overrides enforcing 1M+ file descriptors, `TasksMax=infinity`, `PrivateTmp`, `ProtectSystem=full` |
 
 ```text
 REQUEST -> NGINX -> [FASTCGI MICROCACHE]
@@ -261,18 +267,18 @@ Operationally, DazeStack WP adds diagnostics and lifecycle commands: health chec
   [ Internet Visitors ]
            |
            v
-  +---------------------+        TLS, HTTP/2, optional HTTP/3
-  |        NGINX        |-------------------------------------+
-  +---------------------+                                     |
-           |                                                   |
-           v                                                   |
-  +---------------------+        per-site isolated workers     |
-  |       PHP-FPM       |                                     |
-  +---------------------+                                     |
-      |                |                                      |
-      v                v                                      |
-+-------------+   +-------------+                             |
-|   MariaDB   |   |    Redis    |  <--- object caching -------+
+  +---------------------+        TLS 1.3 (Post-Quantum ML-KEM) + HTTP/3 QUIC
+  |        NGINX        |----------------------------------------------------+
+  +---------------------+                                                    |
+           |                                                                  |
+           v                                                                  |
+  +---------------------+        per-site isolated workers (OPcache JIT)     |
+  |       PHP-FPM       |                                                    |
+  +---------------------+                                                    |
+      |                |                                                     |
+      v                v (Zero-Overhead Unix Socket)                         |
++-------------+   +-------------+                                            |
+| MariaDB 11.4|   |  Redis LTS  |  <--- object caching (25-40% faster) ------+
 +-------------+   +-------------+
       |
       v
@@ -289,7 +295,7 @@ Operationally, DazeStack WP adds diagnostics and lifecycle commands: health chec
 
 ## System Requirements
 
-All tiers require Ubuntu 24.04+ and root/sudo access.
+Certified for **Ubuntu 24.04 LTS (Noble Numbat)** and **Ubuntu 26.04 LTS (Resolute Raccoon)** with root/sudo access.
 
 | Tier | CPU | RAM | Disk | Best For |
 |---|---|---|---|---|

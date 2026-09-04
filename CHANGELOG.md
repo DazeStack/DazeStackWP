@@ -2,7 +2,7 @@
 
 All notable changes to DazeStack WP are documented in this file.
 
-## [Unreleased] - 2026-02-14
+## [0.1.0] - 2026-09-04
 
 ### Added
 - Official certified support for Ubuntu 26.04 LTS ("Resolute Raccoon") alongside Ubuntu 24.04 LTS in `check_os()`, runtime warnings, banner diagnostics, and documentation.
