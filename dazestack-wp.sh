@@ -93,7 +93,7 @@ ENABLE_REDIS_ACL=${ENABLE_REDIS_ACL:-true}
 BACKUP_INCLUDE_FILES=${BACKUP_INCLUDE_FILES:-false}
 ENABLE_HTTP3=${ENABLE_HTTP3:-true}
 ENABLE_BROTLI=${ENABLE_BROTLI:-true}
-ENABLE_ZSTD=${ENABLE_ZSTD:-true}
+ENABLE_ZSTD=${ENABLE_ZSTD:-false}
 ENABLE_HTTP3_HQ=${ENABLE_HTTP3_HQ:-false}
 ENABLE_HTTP3_FORCE_ALL=${ENABLE_HTTP3_FORCE_ALL:-false}
 ENABLE_HTTP2_FORCE_ALL=${ENABLE_HTTP2_FORCE_ALL:-true}
@@ -2575,8 +2575,8 @@ write_nginx_performance_snippet() {
     local brotli_level="${BROTLI_COMP_LEVEL:-5}"
     local zstd_level="${ZSTD_COMP_LEVEL:-3}"
     cat > /etc/nginx/snippets/wordpress-performance.conf <<NGINX_PERF
-# Compression priority: zstd (primary) -> brotli (secondary) -> gzip (last fallback)
-# Note: dynamic module load order is managed to prefer zstd over brotli.
+# Compression priority: brotli (primary) -> gzip (standard fallback); zstd optional when enabled
+# Note: Zstandard is disabled by default to prevent 0-byte stream truncation behind CDNs/reverse proxies.
 gzip on;
 gzip_vary on;
 gzip_proxied any;
@@ -2591,7 +2591,7 @@ NGINX_PERF
 
     if [[ "$ZSTD_AVAILABLE" == "true" ]]; then
         cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_ZSTD
-# Zstandard (primary when module/client support is available)
+# Zstandard (experimental on origin; keep disabled behind CDNs to avoid 0-byte payload truncation)
 zstd on;
 zstd_comp_level $zstd_level;
 zstd_min_length 1000;
@@ -9043,7 +9043,7 @@ menu_nginx_source_build() {
     }
     ENABLE_HTTP3=$(prompt_yes_no "Enable HTTP/3 (QUIC) support-" "${ENABLE_HTTP3:-true}")
     ENABLE_BROTLI=$(prompt_yes_no "Enable Brotli compression-" "${ENABLE_BROTLI:-true}")
-    ENABLE_ZSTD=$(prompt_yes_no "Enable Zstandard compression-" "${ENABLE_ZSTD:-true}")
+    ENABLE_ZSTD=$(prompt_yes_no "Enable Zstandard compression?" "${ENABLE_ZSTD:-false}")
     local enable_auto
     enable_auto=$(prompt_yes_no "Enable automatic stable updates for source builds-" "${ENABLE_NGINX_AUTO_UPDATE:-true}")
     install_or_fallback_nginx_source "$version" "$enable_auto"
