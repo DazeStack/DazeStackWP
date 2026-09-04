@@ -1,0 +1,18 @@
+Source: dazestack-wp
+Section: admin
+Priority: optional
+Maintainer: Ashish Dungdung <mail@ashishdungdung.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/DazeStack/DazeStackWP
+Vcs-Git: https://github.com/DazeStack/DazeStackWP.git
+Vcs-Browser: https://github.com/DazeStack/DazeStackWP
+
+Package: dazestack-wp
+Architecture: all
+Depends: ${misc:Depends}, bash (>= 5.0), curl, jq, tar
+Description: Production-ready automated WordPress LEMP platform
+ DazeStack WP automates and operates an isolated WordPress LEMP stack for
+ Ubuntu 24.04 LTS (Noble) and Ubuntu 26.04 LTS (Resolute) with per-site PHP-FPM
+ pools, Nginx native HTTP/3 QUIC, MariaDB 11.4 LTS, and Redis Unix domain
+ socket caching.

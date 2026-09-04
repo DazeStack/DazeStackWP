@@ -1,0 +1,8 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: dazestack-wp
+Upstream-Contact: Ashish Dungdung <mail@ashishdungdung.com>
+Source: https://github.com/DazeStack/DazeStackWP
+
+Files: *
+Copyright: 2026 Ashish Dungdung
+License: AGPL-3.0-only
