@@ -15,7 +15,7 @@ PHP_TARGET_VERSION=8.4 sudo bash dazestack-wp.sh
 ```
 
 ## 4) How many sites can I host by default?
-Redis DB allocation uses DB `1-15` for sites (DB `0` is reserved), so default logical capacity is 15 sites, subject to hardware limits.
+Redis DB allocation scales dynamically with `REDIS_MAX_DBS` (default 64, supporting 63 dedicated DBs). If dedicated databases are exhausted, DazeStack WP automatically falls back to shared DB `0` using isolated domain key prefixing (`WP_REDIS_PREFIX` and `WP_CACHE_KEY_SALT`), removing any hard site limits beyond physical hardware capacity.
 
 ## 5) Where are credentials stored?
 Encrypted under:

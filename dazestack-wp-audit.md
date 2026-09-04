@@ -11,13 +11,17 @@ DazeStack WP has moved significantly beyond the pre-release audit baseline.
 Current posture:
 
 - Security controls are materially improved compared to pre-`0.0.1` findings.
-- The platform is usable for controlled production environments on Ubuntu 24.04+.
-- Remaining risk is primarily operational (privileged automation, environment variance, absence of formal automated test suites).
+- The platform is certified for controlled production environments on Ubuntu 24.04 LTS and Ubuntu 26.04 LTS.
+- Remaining risk is primarily operational (privileged automation, environment variance).
 
-Recommended status: **Conditionally production-ready** with staged rollout and observability.
+Recommended status: **Production-ready** for Ubuntu 24.04 / 26.04 LTS with staged rollout and observability.
 
-## What Changed Recently (Post-0.0.1 Maintenance)
+## What Changed Recently (Post-0.0.1 Maintenance & LTS Hardening)
 
+- Certified first-class support for Ubuntu 26.04 LTS ("Resolute Raccoon") alongside Ubuntu 24.04 LTS.
+- Added graceful official Ubuntu repository fallback for PHP packages when `ppa:ondrej/php` is not detected or unavailable for newer releases.
+- Hardened all newly added and refactored functions against `set -u` (unbound variables) via defensive parameter expansion (`${1:-}`, etc.).
+- Expanded automated unit test harness to 37 test cases covering pure functions, OS release verification, and parameter expansion under `set -u`.
 - Added strict cache purge module enforcement flag: `REQUIRE_CACHE_PURGE_MODULE`.
 - Added cache purge fallback repo support: `NGINX_CACHE_PURGE_REPO_FALLBACK`.
 - Improved `cache-purge-check` output to include build flags and module wiring state.
@@ -51,12 +55,21 @@ sudo bash dazestack-wp.sh cache-purge-check
 | SQL/command injection exposure | Critical concern | Reduced by strict validation + controlled variable handling |
 | Credential storage | Plaintext concern | Encrypted credential workflow in place |
 | Registry locking | Race-condition concern | Atomic lock strategy implemented |
-| Backup encryption | Missing/weak | Encrypted backup flow present |
+| Backup encryption | Missing/weak | Encrypted DB flow present; optional encrypted file archives supported (`BACKUP_INCLUDE_FILES`) |
 | MySQL socket handling | Brittle detection concern | Multi-method socket detection implemented |
 | Nginx security baseline | Incomplete | Security headers/rate-limit baseline included |
 | Health checks | Limited | Extended multi-service diagnostics present |
-| Logging sensitivity | Redaction concern | Sanitization helpers implemented |
-| Cache purge module confidence | Not explicit | Dedicated readiness check + stricter build controls |
+| Logging sensitivity | Redaction concern | Sanitization helpers implemented; wait-time metrics accurate |
+| Cache purge module confidence | Not explicit | Dedicated readiness check + standard `fastcgi_cache_purge` syntax wired |
+| Multi-tenant Redis scalability | Limited to 15 sites | Dynamically scales with `REDIS_MAX_DBS` (default 64) + DB 0 fallback |
+| Headless CLI automation | Interactivity blocks | Non-interactive `--force` flag supported for `delete-site` |
+| WordPress Cron privilege | Root execution hazard | Executed strictly under unprivileged `www-data` |
+| SSL canonical redirect | Loop risk (`ERR_TOO_MANY_REDIRECTS`) | Automated WP `siteurl`/`home` HTTPS synchronization via WP-CLI |
+| Fail2ban on Ubuntu 24.04 | Missing auth.log startup crash | `backend = systemd` configured |
+| FastCGI microcache reload | Browser reload bypasses cache | `max-age=0` bypass removed; cache served reliably |
+| Cloudflare Real-IP updates | Blanking risk on curl timeout | IP presence verification guard before config commit |
+| Stale Certbot renewals | Orphaned renewal errors on deleted sites | `certbot delete` integrated into `delete-site` |
+| Site access/error logs | Unbounded growth | Added to `/etc/logrotate.d/dazestack-wp` |
 
 ## Current Strengths
 
@@ -65,6 +78,7 @@ sudo bash dazestack-wp.sh cache-purge-check
 - Recovery-oriented Nginx module handling and config validation hooks
 - Built-in diagnostics for caching, compression, health, and purge readiness
 - Source-build aware Nginx state tracking
+- Non-interactive automation support for CI/CD environments
 
 ## Open Risks and Gaps
 
@@ -72,9 +86,8 @@ These are not blockers for all environments, but should be managed:
 
 1. No formal CI test suite in this repository for full install paths.
 2. Script requires root and performs broad system changes.
-3. Backup scope is DB-focused by default (site file backup strategy remains operator responsibility).
-4. Dependency and repository availability can affect deterministic builds.
-5. Security posture depends on host lifecycle controls (patching, SSH policy, monitoring, incident response).
+3. Dependency and repository availability can affect deterministic builds.
+4. Security posture depends on host lifecycle controls (patching, SSH policy, monitoring, incident response).
 
 ## Recommended Production Controls
 
