@@ -4857,7 +4857,17 @@ phase_redis() {
     log_section "Phase 6: Redis Cache Server"
     set_log_context "Phase-6" "Redis"
 
-    if [[ "${ENABLE_REDIS_OFFICIAL_REPO:-false}" == "true" ]]; then
+    # Ubuntu 26+ ships Redis 8.x natively; packages.redis.io has no 'resolute'
+    # release file — same pattern as ondrej/php. Use native packages on Ubuntu 26+.
+    local _redis_os_major
+    _redis_os_major=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID%%.*}" || echo "24")
+    local _use_redis_repo="${ENABLE_REDIS_OFFICIAL_REPO:-false}"
+    if [[ "$_redis_os_major" -ge 26 ]]; then
+        log_info "Ubuntu $_redis_os_major: using native Redis packages (skipping packages.redis.io)"
+        _use_redis_repo="false"
+    fi
+
+    if [[ "$_use_redis_repo" == "true" ]]; then
         setup_redis_repo || log_warn "Failed to configure official Redis repository; using OS default"
     fi
     
@@ -5321,9 +5331,22 @@ phase_security_hardening() {
     log_section "Phase 14: Security Baseline"
     set_log_context "Phase-14" "Security"
     
+    # Detect actual SSH port before configuring security tools that reference it
+    local _sec_ssh_port="22"
+    if command -v sshd &>/dev/null; then
+        _sec_ssh_port=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || echo "22")
+    else
+        _sec_ssh_port=$(grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | tail -1)
+        [[ -z "$_sec_ssh_port" ]] && _sec_ssh_port="22"
+    fi
+
+    # Configure UFW FIRST — fail2ban uses banaction=ufw so UFW must be active
+    # before fail2ban starts. SSH rule is committed before enable to prevent lockout.
+    configure_firewall_preserve || log_warn "UFW firewall configuration skipped"
+
     # Configure fail2ban for SSH and Nginx
     if command -v fail2ban-client &>/dev/null; then
-        cat > /etc/fail2ban/jail.local <<'FAIL2BAN'
+        cat > /etc/fail2ban/jail.local << FAIL2BAN
 [DEFAULT]
 bantime = 3600
 findtime = 600
@@ -5333,7 +5356,7 @@ banaction = ufw
 
 [sshd]
 enabled = true
-port = ssh
+port = $_sec_ssh_port
 
 [nginx-http-auth]
 enabled = true
@@ -5348,11 +5371,8 @@ FAIL2BAN
 
         systemctl enable fail2ban 2>/dev/null || true
         systemctl restart fail2ban 2>/dev/null || true
-        log_success "fail2ban configured"
+        log_success "fail2ban configured (SSH port: $_sec_ssh_port)"
     fi
-    
-    # Configure UFW firewall (preserve existing rules)
-    configure_firewall_preserve || log_warn "UFW firewall configuration skipped"
 
     # Apply conservative sysctl performance tuning
     apply_sysctl_tuning
