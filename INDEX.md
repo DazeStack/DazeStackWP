@@ -79,7 +79,11 @@ Invocation: `sudo bash dazestack-wp.sh <command> [args]` or, after `install-cli`
 | **cdn-enable** &lt;domain&gt; &lt;url&gt; [type] | Enable CDN rewrite (e.g. custom). |
 | **cdn-status** [domain] | Show CDN status. |
 | **compression-optimize** [auto\|balanced\|aggressive\|low-cpu] | Apply compression profile. |
-| **compression-status** | Report gzip/brotli/zstd status. |
+| **compression-status** | Report gzip/brotli/zstd status (dynamic vs static-only). |
+| **compression-enable-origin-brotli** | Enable dynamic Brotli on origin (direct-to-origin only). |
+| **compression-disable-origin-brotli** | Disable dynamic Brotli on origin (`brotli_static` remains on; CDN-safe). |
+| **compression-enable-origin-zstd** | Enable dynamic Zstandard on origin (direct-to-origin only). |
+| **compression-disable-origin-zstd** | Disable dynamic Zstandard on origin (`zstd_static` remains on; CDN-safe). |
 | **create-site** &lt;domain&gt; [title] [admin_email] [admin_user] [--ssl\|--no-ssl] [--admin-user=] | Create WordPress site, DB, pool, Redis DB. |
 | **delete-site** &lt;domain&gt; | Remove site and related config (with confirmation). |
 | **enable-http3-all** | Add HTTP/3 directives to all SSL vhosts. |

@@ -198,7 +198,7 @@ REQUEST -> NGINX -> [FASTCGI MICROCACHE]
                  PHP-FPM (per-site pool) -> MariaDB
                      |
                      +-> Redis object cache (per-site DB)
-RESPONSE <- compression pipeline (zstd -> brotli -> gzip)
+RESPONSE <- compression pipeline (gzip origin dynamic; static .br/.zst/.gz precompressed)
 ```
 
 ### Performance and Cache Diagnostics
@@ -495,8 +495,12 @@ DazeStack WP is suitable for:
 | `cache-purge-check` | Verifies purge module build/wiring readiness. | `sudo bash dazestack-wp.sh cache-purge-check` |
 | `protocol-check` | Deep protocol readiness check for HTTP/2 and HTTP/3 paths. | `sudo bash dazestack-wp.sh protocol-check --all` |
 | `protocol-enforce` | Enforces protocol directives on SSL vhosts. | `sudo bash dazestack-wp.sh protocol-enforce --all` |
-| `compression-status` | Reports gzip/brotli/zstd status. | `sudo bash dazestack-wp.sh compression-status` |
+| `compression-status` | Reports gzip/brotli/zstd status (dynamic vs static-only). | `sudo bash dazestack-wp.sh compression-status` |
 | `compression-optimize` | Applies compression preset profile. | `sudo bash dazestack-wp.sh compression-optimize auto` |
+| `compression-enable-origin-brotli` | Enables dynamic Brotli on origin (direct-to-origin only). | `sudo bash dazestack-wp.sh compression-enable-origin-brotli` |
+| `compression-disable-origin-brotli` | Disables dynamic Brotli (keeps `brotli_static` active; CDN-safe). | `sudo bash dazestack-wp.sh compression-disable-origin-brotli` |
+| `compression-enable-origin-zstd` | Enables dynamic Zstandard on origin (direct-to-origin only). | `sudo bash dazestack-wp.sh compression-enable-origin-zstd` |
+| `compression-disable-origin-zstd` | Disables dynamic Zstandard (keeps `zstd_static` active; CDN-safe). | `sudo bash dazestack-wp.sh compression-disable-origin-zstd` |
 
 ### Nginx Source Build and Edge Tooling
 

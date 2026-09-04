@@ -94,6 +94,8 @@ BACKUP_INCLUDE_FILES=${BACKUP_INCLUDE_FILES:-false}
 ENABLE_HTTP3=${ENABLE_HTTP3:-true}
 ENABLE_BROTLI=${ENABLE_BROTLI:-true}
 ENABLE_ZSTD=${ENABLE_ZSTD:-false}
+ENABLE_DYNAMIC_BROTLI=${ENABLE_DYNAMIC_BROTLI:-false}
+ENABLE_DYNAMIC_ZSTD=${ENABLE_DYNAMIC_ZSTD:-false}
 ENABLE_HTTP3_HQ=${ENABLE_HTTP3_HQ:-false}
 ENABLE_HTTP3_FORCE_ALL=${ENABLE_HTTP3_FORCE_ALL:-false}
 ENABLE_HTTP2_FORCE_ALL=${ENABLE_HTTP2_FORCE_ALL:-true}
@@ -2574,9 +2576,22 @@ write_nginx_performance_snippet() {
     local gzip_level="${GZIP_COMP_LEVEL:-5}"
     local brotli_level="${BROTLI_COMP_LEVEL:-5}"
     local zstd_level="${ZSTD_COMP_LEVEL:-3}"
+    local dynamic_brotli="${ENABLE_DYNAMIC_BROTLI:-false}"
+    local dynamic_zstd="${ENABLE_DYNAMIC_ZSTD:-false}"
+
+    # If env var is not explicitly set, preserve on-disk state if already configured
+    if [[ -z "${ENABLE_DYNAMIC_BROTLI:-}" ]] && grep -qE '^\s*brotli\s+on;' /etc/nginx/snippets/wordpress-performance.conf 2>/dev/null; then
+        dynamic_brotli="true"
+    fi
+    if [[ -z "${ENABLE_DYNAMIC_ZSTD:-}" ]] && grep -qE '^\s*zstd\s+on;' /etc/nginx/snippets/wordpress-performance.conf 2>/dev/null; then
+        dynamic_zstd="true"
+    fi
+
     cat > /etc/nginx/snippets/wordpress-performance.conf <<NGINX_PERF
-# Compression priority: brotli (primary) -> gzip (standard fallback); zstd optional when enabled
-# Note: Zstandard is disabled by default to prevent 0-byte stream truncation behind CDNs/reverse proxies.
+# Safe, rock-solid compression configuration:
+# Native gzip is standard and reliable for FastCGI dynamic origin responses.
+# Dynamic brotli/zstd are kept off by default to prevent FastCGI buffer truncation (0-byte payload) behind CDNs (e.g. Cloudflare).
+# Static pre-compressed assets (.br, .zst, .gz) are served directly from disk when modules are compiled.
 gzip on;
 gzip_vary on;
 gzip_proxied any;
@@ -2590,25 +2605,41 @@ add_header Vary "Accept-Encoding" always;
 NGINX_PERF
 
     if [[ "$ZSTD_AVAILABLE" == "true" ]]; then
-        cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_ZSTD
-# Zstandard (experimental on origin; keep disabled behind CDNs to avoid 0-byte payload truncation)
+        if [[ "$dynamic_zstd" == "true" ]]; then
+            cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_ZSTD
+# Zstandard (dynamic compression enabled via opt-in; verify CDN proxy buffering)
 zstd on;
 zstd_comp_level $zstd_level;
 zstd_min_length 1000;
 zstd_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/xml+rss application/rss+xml application/atom+xml application/xhtml+xml image/svg+xml application/manifest+json;
 zstd_static on;
 NGINX_ZSTD
+        else
+            cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_ZSTD
+# Static-only for Zstandard (prevents dynamic FastCGI buffer truncation behind CDNs)
+zstd off;
+zstd_static on;
+NGINX_ZSTD
+        fi
     fi
 
     if [[ "$BROTLI_AVAILABLE" == "true" ]]; then
-        cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_BROTLI
-# Brotli (secondary fallback when zstd is unavailable to client)
+        if [[ "$dynamic_brotli" == "true" ]]; then
+            cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_BROTLI
+# Brotli (dynamic compression enabled via opt-in; verify CDN proxy buffering)
 brotli on;
 brotli_comp_level $brotli_level;
 brotli_min_length 1000;
-brotli_static on;
 brotli_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/xml+rss application/rss+xml application/atom+xml application/xhtml+xml image/svg+xml application/manifest+json;
+brotli_static on;
 NGINX_BROTLI
+        else
+            cat >> /etc/nginx/snippets/wordpress-performance.conf <<NGINX_BROTLI
+# Static-only for Brotli (prevents dynamic FastCGI buffer truncation behind CDNs)
+brotli off;
+brotli_static on;
+NGINX_BROTLI
+        fi
     fi
 }
 
@@ -7402,13 +7433,21 @@ COMMANDS:
                               Enforce HTTP/2 + HTTP/3/QUIC directives for one/all SSL vhosts
   remove-old-backups [days]   Remove backups older than N days (default: auto)
   compression-status          Show gzip/brotli/zstd enablement and levels
+  compression-optimize [auto|balanced|aggressive|low-cpu]
+                              Optimize compression levels and reload Nginx
+  compression-enable-origin-brotli
+                              Enable dynamic Brotli on origin (direct-to-origin; not recommended behind CDNs)
+  compression-disable-origin-brotli
+                              Disable dynamic Brotli on origin (static brotli remains on; CDN-safe)
+  compression-enable-origin-zstd
+                              Enable dynamic Zstandard on origin (direct-to-origin; not recommended behind CDNs)
+  compression-disable-origin-zstd
+                              Disable dynamic Zstandard on origin (static zstd remains on; CDN-safe)
   cache-status [domain|--all]
                               Show FastCGI cache HIT/MISS/BYPASS health per site
   cache-deep-check [domain|--all]
                               Deep-check cache behavior (anonymous/query/cookie probes)
   cache-purge-check           Verify source build state + cache purge module wiring
-  compression-optimize [auto|balanced|aggressive|low-cpu]
-                              Optimize compression levels and reload Nginx
   factory-reset [--force]     Remove stack, data, and configs (DANGEROUS)
   refresh-installation [--force]  Reinstall stack and reset to defaults
   list-features               Show full feature list
@@ -7997,15 +8036,19 @@ show_compression_status() {
     local brotli_enabled="no"
     local brotli_level="n/a"
     if grep -qE '^\s*brotli\s+on;' "$perf_conf" 2>/dev/null; then
-        brotli_enabled="yes"
+        brotli_enabled="yes (dynamic+static)"
         brotli_level=$(grep -E '^\s*brotli_comp_level' "$perf_conf" 2>/dev/null | awk '{print $2}' | tr -d ';' || true)
+    elif grep -qE '^\s*brotli_static\s+on;' "$perf_conf" 2>/dev/null; then
+        brotli_enabled="static-only (dynamic off; CDN-safe)"
     fi
 
     local zstd_enabled="no"
     local zstd_level="n/a"
     if grep -qE '^\s*zstd\s+on;' "$perf_conf" 2>/dev/null; then
-        zstd_enabled="yes"
+        zstd_enabled="yes (dynamic+static)"
         zstd_level=$(grep -E '^\s*zstd_comp_level' "$perf_conf" 2>/dev/null | awk '{print $2}' | tr -d ';' || true)
+    elif grep -qE '^\s*zstd_static\s+on;' "$perf_conf" 2>/dev/null; then
+        zstd_enabled="static-only (dynamic off; CDN-safe)"
     fi
 
     local brotli_module="unknown"
@@ -8499,6 +8542,76 @@ optimize_compression_profile() {
     systemctl reload nginx >/dev/null 2>&1 || true
     show_compression_status
     log_success "Compression profile applied"
+    return 0
+}
+
+enable_origin_brotli() {
+    check_root
+    log_section "Enable Dynamic Origin Brotli"
+    set_log_context "COMPRESSION" "BROTLI-ON"
+    detect_brotli_support
+    if [[ "$BROTLI_AVAILABLE" != "true" ]]; then
+        log_error "Brotli module is not available in current Nginx build (run 'nginx-source-build' to compile with Brotli)"
+        return 1
+    fi
+    ENABLE_DYNAMIC_BROTLI="true"
+    write_nginx_performance_snippet
+    if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after enabling dynamic Brotli"; then
+        return 1
+    fi
+    systemctl reload nginx >/dev/null 2>&1 || true
+    log_success "Dynamic Brotli origin compression enabled (Warning: If behind Cloudflare/CDN and 0-byte blank pages occur, disable dynamic origin brotli)"
+    show_compression_status
+    return 0
+}
+
+disable_origin_brotli() {
+    check_root
+    log_section "Disable Dynamic Origin Brotli"
+    set_log_context "COMPRESSION" "BROTLI-OFF"
+    ENABLE_DYNAMIC_BROTLI="false"
+    write_nginx_performance_snippet
+    if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after disabling dynamic Brotli"; then
+        return 1
+    fi
+    systemctl reload nginx >/dev/null 2>&1 || true
+    log_success "Dynamic Brotli origin compression disabled (brotli_static remains active for precompressed assets)"
+    show_compression_status
+    return 0
+}
+
+enable_origin_zstd() {
+    check_root
+    log_section "Enable Dynamic Origin Zstandard"
+    set_log_context "COMPRESSION" "ZSTD-ON"
+    detect_zstd_support
+    if [[ "$ZSTD_AVAILABLE" != "true" ]]; then
+        log_error "Zstandard module is not available in current Nginx build (run 'nginx-source-build' to compile with Zstd)"
+        return 1
+    fi
+    ENABLE_DYNAMIC_ZSTD="true"
+    write_nginx_performance_snippet
+    if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after enabling dynamic Zstandard"; then
+        return 1
+    fi
+    systemctl reload nginx >/dev/null 2>&1 || true
+    log_success "Dynamic Zstandard origin compression enabled (Warning: Keep disabled behind CDNs to prevent 0-byte FastCGI buffer truncation)"
+    show_compression_status
+    return 0
+}
+
+disable_origin_zstd() {
+    check_root
+    log_section "Disable Dynamic Origin Zstandard"
+    set_log_context "COMPRESSION" "ZSTD-OFF"
+    ENABLE_DYNAMIC_ZSTD="false"
+    write_nginx_performance_snippet
+    if ! validate_nginx_config_or_recover_modules "Nginx configuration invalid after disabling dynamic Zstandard"; then
+        return 1
+    fi
+    systemctl reload nginx >/dev/null 2>&1 || true
+    log_success "Dynamic Zstandard origin compression disabled (zstd_static remains active for precompressed assets)"
+    show_compression_status
     return 0
 }
 
@@ -9461,6 +9574,26 @@ main() {
         compression-optimize)
             check_root
             optimize_compression_profile "${2:-auto}"
+            ;;
+
+        compression-enable-origin-brotli)
+            check_root
+            enable_origin_brotli || exit 1
+            ;;
+
+        compression-disable-origin-brotli)
+            check_root
+            disable_origin_brotli || exit 1
+            ;;
+
+        compression-enable-origin-zstd)
+            check_root
+            enable_origin_zstd || exit 1
+            ;;
+
+        compression-disable-origin-zstd)
+            check_root
+            disable_origin_zstd || exit 1
             ;;
 
         factory-reset)

@@ -44,7 +44,7 @@ sudo bash dazestack-wp.sh enable-ssl example.com
 ```
 
 ## 8) Does it support HTTP/3, Brotli, Zstd?
-Yes, when supported by your Nginx build/module availability. The script detects support and configures fallbacks.
+Yes, when supported by your Nginx build/module availability. For origin stability and to prevent FastCGI buffer truncation (0-byte payload) behind reverse proxies/CDNs (like Cloudflare), native gzip is used by default for dynamic responses, while Brotli and Zstandard serve static pre-compressed files (`brotli_static on;`, `zstd_static on;`). Dynamic compression can be toggled via `compression-enable-origin-brotli` and `compression-enable-origin-zstd` if running direct-to-origin without a CDN.
 
 ## 9) How do I check cache health?
 

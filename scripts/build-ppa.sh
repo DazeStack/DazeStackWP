@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-PPA_TARGET="${1:-ppa:dazestack/ppa}"
+PPA_TARGET="${1:-ppa:dazestack/wp}"
 
 echo "=== Building Debian Source Package for Launchpad PPA ==="
 
