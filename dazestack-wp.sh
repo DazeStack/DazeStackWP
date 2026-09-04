@@ -136,9 +136,10 @@ NGINX_ZSTD_REPO=${NGINX_ZSTD_REPO:-"https://github.com/tokers/zstd-nginx-module.
 NGINX_ZSTD_REF=${NGINX_ZSTD_REF:-"master"}
 ENABLE_CACHE_PURGE_MODULE=${ENABLE_CACHE_PURGE_MODULE:-true}
 REQUIRE_CACHE_PURGE_MODULE=${REQUIRE_CACHE_PURGE_MODULE:-$ENABLE_CACHE_PURGE_MODULE}
-NGINX_CACHE_PURGE_REPO=${NGINX_CACHE_PURGE_REPO:-"https://github.com/FRiCKLE/ngx_cache_purge.git"}
+# nginx-modules fork supports dynamic module registration (required); FRiCKLE is static-only
+NGINX_CACHE_PURGE_REPO=${NGINX_CACHE_PURGE_REPO:-"https://github.com/nginx-modules/ngx_cache_purge.git"}
 NGINX_CACHE_PURGE_REF=${NGINX_CACHE_PURGE_REF:-"master"}
-NGINX_CACHE_PURGE_REPO_FALLBACK=${NGINX_CACHE_PURGE_REPO_FALLBACK:-"https://github.com/nginx-modules/ngx_cache_purge.git"}
+NGINX_CACHE_PURGE_REPO_FALLBACK=${NGINX_CACHE_PURGE_REPO_FALLBACK:-"https://github.com/FRiCKLE/ngx_cache_purge.git"}
 ZSTD_BUILD_PIC=${ZSTD_BUILD_PIC:-true}
 ZSTD_SOURCE_REPO=${ZSTD_SOURCE_REPO:-"https://github.com/facebook/zstd.git"}
 ZSTD_SOURCE_REF=${ZSTD_SOURCE_REF:-"latest-stable"}
@@ -3821,6 +3822,9 @@ run_logged_build_cmd() {
 
 build_nginx_from_source() {
     local version="${1:-}"
+    # Resolve "latest-stable" / empty string to an actual version number here
+    # so callers never accidentally pass a symbolic name to the download URL.
+    version=$(resolve_nginx_source_version "${version}")
     [[ -z "$version" ]] && {
         log_error "Nginx source build version is required"
         return 1
@@ -4523,11 +4527,20 @@ phase_php_installation() {
     if [[ "$PHP_TARGET_VERSION" != "8.5" ]]; then
         log_warn "This release is tuned for PHP 8.5 (current target: $PHP_TARGET_VERSION)"
     fi
-    add-apt-repository -y ppa:ondrej/php > /dev/null 2>&1 || {
-        log_error "Failed to add PHP repository"
-        exit 1
-    }
-    
+
+    # Ubuntu 26+ (Resolute) ships PHP 8.5 natively; ppa:ondrej/php has no release
+    # file for that suite and causes apt-get update to exit 100. Skip the PPA.
+    local _os_major
+    _os_major=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID%%.*}" || echo "24")
+    if [[ "$_os_major" -ge 26 ]]; then
+        log_info "Ubuntu $_os_major detected — using native PHP packages (skipping ppa:ondrej/php)"
+    else
+        add-apt-repository -y ppa:ondrej/php > /dev/null 2>&1 || {
+            log_error "Failed to add PHP repository (ppa:ondrej/php)"
+            exit 1
+        }
+    fi
+
     apt-get update > /dev/null 2>&1
     
     # Default to PHP 8.5 (stable)
@@ -4548,8 +4561,16 @@ phase_php_installation() {
         "php${PHP_VERSION}-redis"
         "php${PHP_VERSION}-bcmath"
         "php${PHP_VERSION}-soap"
-        "php${PHP_VERSION}-opcache"
     )
+    # php-opcache is a standalone package on PHP < 8.5; on PHP 8.5+ it is
+    # compiled into core and no separate package exists — skip it to avoid
+    # apt errors on Ubuntu 26 / PHP 8.5.
+    local _php_major _php_minor
+    _php_major=$(echo "$PHP_VERSION" | cut -d. -f1)
+    _php_minor=$(echo "$PHP_VERSION" | cut -d. -f2)
+    if [[ "$_php_major" -lt 8 || ( "$_php_major" -eq 8 && "$_php_minor" -lt 5 ) ]]; then
+        php_required_packages+=("php${PHP_VERSION}-opcache")
+    fi
     local php_packages=("${php_required_packages[@]}")
     for opt in "${PHP_OPTIONAL_PACKAGES[@]}"; do
         php_packages+=("php${PHP_VERSION}-${opt}")
@@ -9413,6 +9434,12 @@ main() {
             exit 0
             ;;
             
+        # Unattended / CI-friendly aliases
+        install|setup|full-install)
+            check_root
+            run_full_install
+            ;;
+
         "")
             if is_interactive; then
                 menu_loop
