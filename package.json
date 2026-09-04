@@ -1,6 +1,6 @@
 {
   "name": "dazestack-wp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Production-ready automated WordPress LEMP platform for Ubuntu 24.04 & 26.04 LTS",
   "keywords": [
     "wordpress",

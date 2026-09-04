@@ -10,7 +10,7 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 
 ################################################################################
-# DazeStack WP v0.1.0
+# DazeStack WP v0.1.1
 # Tagline: Laze while your WordPress stack builds itself.
 # Series: DazeStack - tools that let you laze while the code does the work.
 # Description: Production-ready, fully automated WordPress LEMP platform with per-site
@@ -32,7 +32,7 @@ INSTALLER_NAME="DazeStack WP"
 INSTALLER_TAGLINE="Laze while your WordPress stack builds itself."
 INSTALLER_SERIES="DazeStack"
 INSTALLER_DESCRIPTION="Production-ready, fully automated WordPress LEMP platform. The idea was to automate and make it full fledged as much as possible."
-INSTALLER_VERSION="0.1.0"
+INSTALLER_VERSION="0.1.1"
 INSTALLER_EDITION="Core"
 INSTALLER_AUTHOR="Ashish Dungdung"
 INSTALLER_WEBSITE="https://ashishdungdung.com"

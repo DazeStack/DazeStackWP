@@ -2,6 +2,23 @@
 
 All notable changes to DazeStack WP are documented in this file.
 
+## [0.1.1] - 2026-09-04
+
+### Fixed
+- **FastCGI 0-Byte Payload Truncation**: Resolved critical stream truncation in Nginx dynamic output filter chain behind CDNs (Cloudflare). Dynamic `brotli` and `zstd` modules are now disabled by default for FastCGI dynamic responses, while retaining standard high-performance native `gzip on;` on the origin.
+- **Static Pre-Compressed Assets**: Retained direct kernel `sendfile` delivery for pre-compressed static assets (`brotli_static on;`, `zstd_static on;`) without FastCGI filter interference.
+- **Ubuntu 26.04+ PPA Bypass**: Automatically skip `ppa:ondrej/php` and third-party Redis repositories on Ubuntu 26+ ("Resolute Raccoon") to consume canonical native packages (PHP 8.5, Redis 8.x), preventing APT `exit=100` errors.
+- **PHP 8.5 OPcache Check**: Conditioned standalone `php-opcache` package validation to avoid false-positive failures on PHP 8.5+ where OPcache is compiled directly into PHP core.
+- **OpenSSL GCC 15 Compilation**: Pinned official OpenSSL QUIC dependency to stable `openssl-3.5.1` LTS, avoiding unreleased OpenSSL 4.x breaking API changes under GCC 15 `-Werror`.
+- **Nginx Cache Purge Dynamic Module**: Switched default `NGINX_CACHE_PURGE_REPO` to `nginx-modules/ngx_cache_purge.git` for native dynamic module (`auto/module`) compilation support.
+- **Nginx Source Version Resolution**: Added explicit `resolve_nginx_source_version` at entry of `build_nginx_from_source()` to prevent 404s when `latest-stable` is passed.
+- **Firewall & Jail Ordering**: Ensured UFW is enabled before starting Fail2ban to prevent `banaction = ufw` race conditions, and dynamically query active SSH port via `sshd -T`.
+
+### Added
+- **Origin Compression Toggles**: Added CLI commands `compression-enable-origin-brotli`, `compression-disable-origin-brotli`, `compression-enable-origin-zstd`, and `compression-disable-origin-zstd` for direct-to-origin setups without CDNs.
+- **Enhanced Compression Status**: Updated `compression-status` diagnostic command to report active compression mode (`dynamic+static` vs `static-only; CDN-safe`).
+- **CLI Setup Aliases**: Added `install`, `setup`, and `full-install` aliases to CLI main router for unattended deployments.
+
 ## [0.1.0] - 2026-09-04
 
 ### Added

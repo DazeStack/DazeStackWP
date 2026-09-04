@@ -12,3 +12,11 @@ Thumbs.db
 
 # Env files
 .env
+
+# Package build artifacts
+*.deb
+*.changes
+*.buildinfo
+*.dsc
+*.tar.gz
+*.tar.xz

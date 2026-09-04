@@ -1,3 +1,18 @@
+dazestack-wp (0.1.1-1) noble; urgency=medium
+
+  * Release v0.1.1: Production hardening from live Ubuntu 26.04 LTS deployment.
+  * Resolved FastCGI 0-byte stream truncation behind CDNs/Cloudflare by defaulting dynamic brotli/zstd to off.
+  * Retained static-only precompressed assets (brotli_static on, zstd_static on).
+  * Added origin compression CLI toggle commands (compression-enable-origin-brotli/zstd).
+  * Auto-skip ppa:ondrej/php and third-party Redis repo on Ubuntu 26+; use canonical native packages.
+  * Conditioned php-opcache check for PHP 8.5+ where OPcache is compiled directly into core.
+  * Pinned official OpenSSL QUIC dependency to openssl-3.5.1 LTS for GCC 15 compatibility.
+  * Switched default cache purge repo to actively maintained nginx-modules/ngx_cache_purge.
+  * Enforced UFW firewall rules before initializing Fail2ban jail with dynamic SSH port.
+  * Added resolve_nginx_source_version in build_nginx_from_source to prevent 404s.
+
+ -- Ashish Dungdung <mail@ashishdungdung.com>  Fri, 04 Sep 2026 12:17:00 +0530
+
 dazestack-wp (0.1.0-1) noble; urgency=medium
 
   * Release v0.1.0 for Ubuntu 24.04 and 26.04 LTS.
