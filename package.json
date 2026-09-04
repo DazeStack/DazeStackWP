@@ -1,0 +1,20 @@
+{
+  "name": "dazestack-wp",
+  "version": "0.1.0",
+  "description": "Production-ready automated WordPress LEMP platform for Ubuntu 24.04 & 26.04 LTS",
+  "keywords": [
+    "wordpress",
+    "lemp",
+    "nginx",
+    "http3",
+    "quic",
+    "mariadb",
+    "redis",
+    "ubuntu",
+    "bash"
+  ],
+  "scripts": {
+    "dazestack-wp": "dazestack-wp.sh"
+  },
+  "install": "install -m 0755 dazestack-wp.sh /usr/local/sbin/dazestack-wp"
+}

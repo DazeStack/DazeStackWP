@@ -1,4 +1,4 @@
-﻿# DazeStack WP
+# DazeStack WP
 
 <p align="center">
   <strong>Laze while your WordPress stack builds itself.</strong>
@@ -364,6 +364,38 @@ DazeStack WP is designed for VPS/cloud launches and future copy-paste install re
 - Optional CLI wrapper auto-install in provisioning flow
 
 ## Quick Start
+
+### Installation Methods
+
+#### 1. Homebrew (macOS & Linux)
+```bash
+brew tap dazestack/tap
+brew install dazestack-wp
+```
+
+#### 2. Debian / Ubuntu Package (`.deb`)
+```bash
+curl -fsSL https://github.com/DazeStack/DazeStackWP/releases/download/v0.1.0/dazestack-wp_0.1.0_all.deb -o dazestack-wp.deb
+sudo apt install -y ./dazestack-wp.deb
+sudo dazestack-wp
+```
+
+#### 3. Basher (Shell Package Manager)
+```bash
+basher install DazeStack/DazeStackWP
+```
+
+#### 4. Bpkg (Bash Package Manager)
+```bash
+bpkg install DazeStack/DazeStackWP
+```
+
+#### 5. Direct Download (Single Script)
+```bash
+curl -fsSL https://raw.githubusercontent.com/DazeStack/DazeStackWP/main/dazestack-wp.sh -o dazestack-wp.sh
+chmod +x dazestack-wp.sh
+sudo ./dazestack-wp.sh
+```
 
 ### Fast Path
 
