@@ -148,7 +148,10 @@ BROTLI_BUILD_PIC=${BROTLI_BUILD_PIC:-true}
 NGINX_QUIC_OPENSSL_VENDOR=${NGINX_QUIC_OPENSSL_VENDOR:-"official"}
 NGINX_QUIC_OPENSSL_REPO_OFFICIAL=${NGINX_QUIC_OPENSSL_REPO_OFFICIAL:-"https://github.com/openssl/openssl.git"}
 NGINX_QUIC_OPENSSL_REPO_QUIC=${NGINX_QUIC_OPENSSL_REPO_QUIC:-"https://github.com/quictls/openssl.git"}
-NGINX_QUIC_OPENSSL_REF_OFFICIAL=${NGINX_QUIC_OPENSSL_REF_OFFICIAL:-"latest-stable"}
+# Pin to OpenSSL 3.5.1 LTS stable — OpenSSL 4.x introduced breaking API changes
+# (opaque ASN1_INTEGER struct, stricter const qualifiers) that fail Nginx compilation
+# under gcc 15 -Werror. Do not track "latest-stable" for this ref.
+NGINX_QUIC_OPENSSL_REF_OFFICIAL=${NGINX_QUIC_OPENSSL_REF_OFFICIAL:-"openssl-3.5.1"}
 NGINX_QUIC_OPENSSL_REF_QUIC=${NGINX_QUIC_OPENSSL_REF_QUIC:-"latest-stable"}
 NGINX_QUIC_OPENSSL_MIN_VERSION=${NGINX_QUIC_OPENSSL_MIN_VERSION:-"3.5.1"}
 NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLBACK=${NGINX_QUIC_OPENSSL_REF_OFFICIAL_FALLBACK:-"openssl-3.5.1"}
@@ -1901,7 +1904,13 @@ check_php_package_availability() {
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "PHP $PHP_VERSION packages not available: ${missing[*]}"
-        log_error "Ensure ppa:ondrej/php is reachable and supports Ubuntu ${major:-24}.${minor:-04}"
+        local _chk_major
+        _chk_major=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID%%.*}" || echo "24")
+        if [[ "$_chk_major" -ge 26 ]]; then
+            log_error "Ubuntu $_chk_major: ensure php${PHP_VERSION} is available in the official Ubuntu archive"
+        else
+            log_error "Ensure ppa:ondrej/php is reachable and supports Ubuntu ${major:-24}.${minor:-04}"
+        fi
         return 1
     fi
     
@@ -4576,9 +4585,19 @@ phase_php_installation() {
         php_packages+=("php${PHP_VERSION}-${opt}")
     done
     
-    ensure_ondrej_php_preferred || exit 1
+    # On Ubuntu 26+ packages come from native Ubuntu repos — skip ondrej preference
+    # pinning which would try to write pins referencing a PPA that doesn't exist.
+    local _phase_os_major
+    _phase_os_major=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID%%.*}" || echo "24")
+    if [[ "$_phase_os_major" -lt 26 ]]; then
+        ensure_ondrej_php_preferred || exit 1
+    fi
 
-    log_info "Checking PHP $PHP_VERSION package availability (ppa:ondrej/php)..."
+    if [[ "$_phase_os_major" -ge 26 ]]; then
+        log_info "Checking PHP $PHP_VERSION package availability (official Ubuntu repository)..."
+    else
+        log_info "Checking PHP $PHP_VERSION package availability (ppa:ondrej/php)..."
+    fi
     check_php_package_availability "${php_packages[@]}" || exit 1
     local install_packages=()
     for pkg in "${php_packages[@]}"; do
@@ -4776,7 +4795,17 @@ phase_mariadb() {
     log_section "Phase 5: MariaDB Database Server"
     set_log_context "Phase-5" "MariaDB"
 
-    if [[ "${ENABLE_MARIADB_OFFICIAL_REPO:-false}" == "true" ]]; then
+    # On Ubuntu 26+ MariaDB 11.4 LTS is available natively — prefer official
+    # MariaDB repo only if the native version is older than the target.
+    local _mdb_os_major
+    _mdb_os_major=$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID%%.*}" || echo "24")
+    local _use_mariadb_repo="${ENABLE_MARIADB_OFFICIAL_REPO:-false}"
+    if [[ "$_mdb_os_major" -ge 26 ]]; then
+        # Ubuntu 26 ships MariaDB 11.4 LTS natively — use it; skip external repo
+        log_info "Ubuntu $_mdb_os_major: using native MariaDB packages (skipping external repo)"
+        _use_mariadb_repo="false"
+    fi
+    if [[ "$_use_mariadb_repo" == "true" ]]; then
         setup_mariadb_repo || log_warn "Failed to configure official MariaDB repository; using OS default"
     fi
     
