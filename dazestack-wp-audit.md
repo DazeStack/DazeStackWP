@@ -1,31 +1,36 @@
 # DazeStack WP - Current Audit Report
 
-Audit date: February 13, 2026
-Script line: `v0.1.0 (Core)` + latest maintenance patches
-Scope: `dazestack-wp.sh` behavior and operational docs currently in this repository
+Audit date: September 6, 2026
+Script line: `v0.1.1 (Core)` + live production hardening
+Scope: `dazestack-wp.sh` behavior, functionality, and operational docs currently in this repository
 
 ## Executive Summary
 
-DazeStack WP has moved significantly beyond the pre-release audit baseline.
+DazeStack WP has moved significantly beyond the initial baseline, incorporating critical architectural fixes and runtime enhancements validated during live production migration onto Ubuntu 26.04.1 LTS ("Resolute Raccoon") on AMD EPYC hardware.
 
 Current posture:
 
-- Security controls are materially improved compared to pre-`0.0.1` findings.
-- The platform is certified for controlled production environments on Ubuntu 24.04 LTS and Ubuntu 26.04 LTS.
-- Remaining risk is primarily operational (privileged automation, environment variance).
+- Security controls are materially hardened, with automated privilege containment, parameter shielding under `set -u`, and atomic locking.
+- The platform is certified and battle-tested for production environments on Ubuntu 24.04 LTS and Ubuntu 26.04 LTS.
+- The 0-byte stream truncation FastCGI compression bug behind CDNs (Cloudflare) is completely resolved.
+- Full-page caching is hardened against silent header/cookie bypasses, persistent against `tmpfiles.d` evictions, and optimized with 4MB FastCGI RAM buffers.
+- Bulk WP-CLI ingestion and catalog update operations are protected against archive purge floods.
 
-Recommended status: **Production-ready** for Ubuntu 24.04 / 26.04 LTS with staged rollout and observability.
+Recommended status: **Production-ready** for high-traffic WordPress & WooCommerce deployments on Ubuntu 24.04 / 26.04 LTS.
 
-## What Changed Recently (Post-0.0.1 Maintenance & LTS Hardening)
+## What Changed Recently (v0.1.1 Hardening & Production Verification)
 
-- Certified first-class support for Ubuntu 26.04 LTS ("Resolute Raccoon") alongside Ubuntu 24.04 LTS.
-- Added graceful official Ubuntu repository fallback for PHP packages when `ppa:ondrej/php` is not detected or unavailable for newer releases.
-- Hardened all newly added and refactored functions against `set -u` (unbound variables) via defensive parameter expansion (`${1:-}`, etc.).
-- Expanded automated unit test harness to 37 test cases covering pure functions, OS release verification, and parameter expansion under `set -u`.
-- Added strict cache purge module enforcement flag: `REQUIRE_CACHE_PURGE_MODULE`.
-- Added cache purge fallback repo support: `NGINX_CACHE_PURGE_REPO_FALLBACK`.
-- Improved `cache-purge-check` output to include build flags and module wiring state.
-- Fixed `safe_apt_install()` pipeline-status handling under `set -u` (`PIPESTATUS` snapshot before index access).
+- **Ubuntu 26 Native-First Architecture**: Bypasses `ppa:ondrej/php` and third-party Redis repositories on Ubuntu 26+ (`VERSION_ID >= 26`) to consume canonical native PHP 8.5 and Redis 8.x packages, eliminating APT exit 100 crashes.
+- **PHP 8.5 OPcache Virtualization**: Resolved false-positive checks for `php8.5-opcache` by checking runtime core availability via `php -m`.
+- **OpenSSL 3.5.1 LTS QUIC Pin**: Pinned official OpenSSL dependency to `openssl-3.5.1`, avoiding unreleased OpenSSL 4.x breaking API changes under GCC 15 `-Werror`.
+- **Dynamic Module Cache Purge**: Defaulted repository to maintained `nginx-modules/ngx_cache_purge` supporting dynamic `.so` compilation.
+- **FastCGI CDN Stream Truncation Resolution**: Disabled origin dynamic `brotli` and `zstd` by default, serving reliable native `gzip on;` for FastCGI dynamic responses while retaining kernel `sendfile` static pre-compressed assets (`brotli_static on;`, `zstd_static on;`).
+- **FastCGI Cache Header & Cookie Hardening**: Added `fastcgi_ignore_headers Cache-Control Expires Set-Cookie;` and removed `$upstream_http_set_cookie` from `fastcgi_no_cache` to ensure standard WordPress headers and session/tracking cookies do not force uncached responses.
+- **Persistent systemd-tmpfiles Cache Definition**: Installed `/etc/tmpfiles.d/nginx-cache.conf` (`0755` for `/var/cache/nginx`, `0700` for `/var/cache/nginx/microcache`), preventing 5-second cache-lock timeout freezes from missing cache directories.
+- **Enlarged FastCGI Buffers in RAM**: Upgraded `fastcgi_buffers 64 64k` (4MB total RAM), `fastcgi_buffer_size 128k`, `fastcgi_busy_buffers_size 256k`, and `fastcgi_temp_file_write_size 256k` to handle heavy WooCommerce / faceted catalog payloads in RAM without disk buffering bottlenecks.
+- **Extended Default Cache TTL**: Extended `FASTCGI_CACHE_TTL` default from `60s` to `10m` for optimal origin offloading, relying on event-driven instant purges.
+- **Bulk Operation Purge Flood Prevention**: Added `wp-bulk-start`, `wp-bulk-finish`, and `wp-bulk-run` commands and defaulted `purge_archive_on_edit = 0` in Nginx Helper to prevent catastrophic archive purge floods during large WP-CLI imports.
+- **Automated Unit Test Suite**: 38 test cases covering pure validation functions, parameter expansion under `set -u`, and OS release detection (100% passing).
 
 ## Incident-Focused Verification (Cache Purge Readiness)
 
@@ -104,6 +109,7 @@ Use `CHANGELOG.md` as the canonical version timeline.
 - `pre-0.0.1`: legacy audit snapshot context only
 - `0.0.1`: first stable documented release line
 - `0.1.0 (2026-09-04)`: Ubuntu 26.04/24.04 LTS certified, multi-gigabit kernel stack, OpenSSL 3.4+, Post-Quantum TLS 1.3, Systemd overrides, MariaDB 11.4 LTS, Redis LTS with Unix socket
+- `0.1.1 (2026-09-06)`: Live production hardening, FastCGI CDN compression fix, `fastcgi_ignore_headers`, persistent `tmpfiles.d` microcache, 4MB RAM FastCGI buffers, 10m TTL, and WP-CLI bulk purge protection
 
 ## Final Assessment
 
