@@ -111,7 +111,7 @@ ENABLE_AUTO_SSL=${ENABLE_AUTO_SSL:-false}
 ENABLE_CLOUDFLARE=${ENABLE_CLOUDFLARE:-true}
 REQUIRE_OPCACHE=${REQUIRE_OPCACHE:-false}
 ENABLE_NGINX_HELPER=${ENABLE_NGINX_HELPER:-true}
-FASTCGI_CACHE_TTL=${FASTCGI_CACHE_TTL:-"60s"}
+FASTCGI_CACHE_TTL=${FASTCGI_CACHE_TTL:-"10m"}
 FASTCGI_CACHE_TTL_404=${FASTCGI_CACHE_TTL_404:-"10m"}
 FASTCGI_CACHE_INACTIVE=${FASTCGI_CACHE_INACTIVE:-"60m"}
 FASTCGI_SKIP_QUERY_STRING=${FASTCGI_SKIP_QUERY_STRING:-true}
@@ -2554,9 +2554,11 @@ add_header X-XSS-Protection "1; mode=block" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
 
-# FastCGI Buffers
-fastcgi_buffers 16 16k;
-fastcgi_buffer_size 32k;
+# FastCGI Buffers (optimized for high-payload pages and catalogs in RAM)
+fastcgi_buffers 64 64k;
+fastcgi_buffer_size 128k;
+fastcgi_busy_buffers_size 256k;
+fastcgi_temp_file_write_size 256k;
 client_max_body_size 100M;
 client_body_timeout 300s;
 
@@ -2890,6 +2892,20 @@ write_microcache_config() {
         fi
     fi
     NGINX_CACHE_MAX_SIZE="$cache_max_size"
+
+    mkdir -p /var/cache/nginx/microcache
+    chown -R www-data:www-data /var/cache/nginx 2>/dev/null || true
+    chmod 755 /var/cache/nginx 2>/dev/null || true
+    chmod 700 /var/cache/nginx/microcache 2>/dev/null || true
+    if [[ -d /etc/tmpfiles.d ]] || mkdir -p /etc/tmpfiles.d 2>/dev/null; then
+        cat > /etc/tmpfiles.d/nginx-cache.conf <<'EOF'
+d /var/cache/nginx 0755 www-data www-data -
+d /var/cache/nginx/microcache 0700 www-data www-data -
+EOF
+        if command -v systemd-tmpfiles >/dev/null 2>&1; then
+            systemd-tmpfiles --create /etc/tmpfiles.d/nginx-cache.conf 2>/dev/null || true
+        fi
+    fi
 
     cat > /etc/nginx/conf.d/10-cache-zones.conf <<'NGINX_CACHE'
 # FastCGI micro-cache zones
@@ -5069,7 +5085,18 @@ phase_nginx_microcache() {
     
     mkdir -p /var/cache/nginx/microcache
     chown -R www-data:www-data /var/cache/nginx
-    chmod -R 755 /var/cache/nginx
+    chmod 755 /var/cache/nginx
+    chmod 700 /var/cache/nginx/microcache
+
+    # Persistent tmpfiles.d declaration to prevent directory deletion during maintenance/reboots
+    mkdir -p /etc/tmpfiles.d
+    cat > /etc/tmpfiles.d/nginx-cache.conf <<'EOF'
+d /var/cache/nginx 0755 www-data www-data -
+d /var/cache/nginx/microcache 0700 www-data www-data -
+EOF
+    if command -v systemd-tmpfiles >/dev/null 2>&1; then
+        systemd-tmpfiles --create /etc/tmpfiles.d/nginx-cache.conf 2>/dev/null || true
+    fi
 
     write_microcache_config
     
@@ -6562,7 +6589,8 @@ update_vhost_fastcgi_cache() {
 
     sed -i \
         -e 's/fastcgi_cache_bypass \$skip_cache \$skip_cache_method \$skip_cache_uri;/fastcgi_cache_bypass \$skip_cache_request;/' \
-        -e 's/fastcgi_no_cache \$skip_cache \$skip_cache_method \$skip_cache_uri;/fastcgi_no_cache \$skip_cache_request \$upstream_http_set_cookie;/' \
+        -e 's/fastcgi_no_cache \$skip_cache \$skip_cache_method \$skip_cache_uri;/fastcgi_no_cache \$skip_cache_request;/' \
+        -e 's/fastcgi_no_cache \$skip_cache_request \$upstream_http_set_cookie;/fastcgi_no_cache \$skip_cache_request;/' \
         -e 's/add_header X-FastCGI-Cache \$upstream_cache_status;/add_header X-FastCGI-Cache \$upstream_cache_status always;/' \
         -e 's/fastcgi_cache_key "\$scheme\$purge_method\$host\$request_uri";/fastcgi_cache_key "\$scheme\$host\$request_uri";/' \
         -e 's/fastcgi_cache_key "\$scheme\$purge_method\$host\$1\$is_args\$args";/fastcgi_cache_key "\$scheme\$host\$1\$is_args\$args";/' \
@@ -6576,6 +6604,10 @@ update_vhost_fastcgi_cache() {
         -e "s|fastcgi_cache_valid 200 301 302 [^;]+;|fastcgi_cache_valid 200 301 302 ${FASTCGI_CACHE_TTL};|" \
         -e "s|fastcgi_cache_valid 404 [^;]+;|fastcgi_cache_valid 404 ${FASTCGI_CACHE_TTL_404};|" \
         "$tmp" 2>/dev/null || true
+
+    if ! grep -q 'fastcgi_ignore_headers' "$tmp"; then
+        sed -i '/fastcgi_no_cache/a\        fastcgi_ignore_headers Cache-Control Expires Set-Cookie;' "$tmp" 2>/dev/null || true
+    fi
 
     if ! grep -q 'fastcgi_cache_methods GET HEAD;' "$tmp"; then
         sed -i '/fastcgi_cache wordpress_cache;/a\        fastcgi_cache_methods GET HEAD;' "$tmp" 2>/dev/null || true
@@ -6606,6 +6638,8 @@ upgrade_existing_sites() {
     fi
 
     write_microcache_config
+    write_nginx_security_snippet
+    write_nginx_performance_snippet
     write_nginx_image_optimization_map
     write_nginx_image_optimization_snippet
 
@@ -6686,6 +6720,100 @@ enable_ssl_for_site() {
 
     log_warn "SSL issuance failed for $domain (check DNS and firewall)"
     return 1
+}
+
+wp_bulk_start() {
+    local domain_raw=${1:-}
+    local domain
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    local site_dir="$SITES_DIR/$domain"
+    local wp_path="$site_dir/public"
+    if [[ ! -f "$wp_path/wp-config.php" ]]; then
+        log_error "WordPress installation not found for $domain ($wp_path)"
+        return 1
+    fi
+
+    ensure_wp_cli || return 1
+    log_info "Preparing $domain for bulk operations (suppressing archive purge floods)..."
+
+    run_wp_cli "$wp_path" eval '
+        $opts = get_option("rt_wp_nginx_helper_options", array());
+        if (is_array($opts)) {
+            $opts["_dazestack_prev_archive_edit"] = isset($opts["purge_archive_on_edit"]) ? $opts["purge_archive_on_edit"] : 1;
+            $opts["_dazestack_prev_archive_del"] = isset($opts["purge_archive_on_del"]) ? $opts["purge_archive_on_del"] : 1;
+            $opts["purge_archive_on_edit"] = 0;
+            $opts["purge_archive_on_del"] = 0;
+            update_option("rt_wp_nginx_helper_options", $opts);
+        }
+    ' >/dev/null 2>&1 || true
+
+    log_success "Archive purge spam suppressed for $domain during bulk ingestion"
+    return 0
+}
+
+wp_bulk_finish() {
+    local domain_raw=${1:-}
+    local domain
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    local site_dir="$SITES_DIR/$domain"
+    local wp_path="$site_dir/public"
+    if [[ ! -f "$wp_path/wp-config.php" ]]; then
+        log_error "WordPress installation not found for $domain ($wp_path)"
+        return 1
+    fi
+
+    ensure_wp_cli || return 1
+    log_info "Restoring standard purge options for $domain..."
+
+    run_wp_cli "$wp_path" eval '
+        $opts = get_option("rt_wp_nginx_helper_options", array());
+        if (is_array($opts)) {
+            $prev_edit = isset($opts["_dazestack_prev_archive_edit"]) ? $opts["_dazestack_prev_archive_edit"] : 0;
+            $prev_del = isset($opts["_dazestack_prev_archive_del"]) ? $opts["_dazestack_prev_archive_del"] : 0;
+            $opts["purge_archive_on_edit"] = $prev_edit;
+            $opts["purge_archive_on_del"] = $prev_del;
+            unset($opts["_dazestack_prev_archive_edit"]);
+            unset($opts["_dazestack_prev_archive_del"]);
+            update_option("rt_wp_nginx_helper_options", $opts);
+        }
+    ' >/dev/null 2>&1 || true
+
+    # Trigger a single global cache purge for the domain
+    log_info "Triggering single clean cache purge for $domain..."
+    curl -s -k -X PURGE "https://127.0.0.1/.*" -H "Host: $domain" >/dev/null 2>&1 || \
+    curl -s "http://127.0.0.1/purge/.*" -H "Host: $domain" >/dev/null 2>&1 || true
+
+    log_success "Bulk operations completed and cache refreshed for $domain"
+    return 0
+}
+
+wp_bulk_run() {
+    local domain_raw=${1:-}
+    shift || true
+    if [[ -z "$domain_raw" || $# -eq 0 ]]; then
+        log_error "Usage: dazestack-wp wp-bulk-run <domain> <wp-cli args...>"
+        return 1
+    fi
+
+    local domain
+    domain=$(validate_domain "$domain_raw") || return 1
+
+    local site_dir="$SITES_DIR/$domain"
+    local wp_path="$site_dir/public"
+    if [[ ! -f "$wp_path/wp-config.php" ]]; then
+        log_error "WordPress installation not found for $domain ($wp_path)"
+        return 1
+    fi
+
+    ensure_wp_cli || return 1
+    wp_bulk_start "$domain"
+    local ret=0
+    log_info "Executing WP-CLI command for $domain: wp $*"
+    run_wp_cli "$wp_path" "$@" || ret=$?
+    wp_bulk_finish "$domain"
+    return $ret
 }
 
 create_site() {
@@ -6934,6 +7062,19 @@ create_site() {
         if [[ "$CACHE_PURGE_AVAILABLE" == "true" ]]; then
             run_wp_cli "$wp_path" plugin install nginx-helper --activate || log_warn "Failed to install Nginx Helper"
             run_wp_cli "$wp_path" config set RT_WP_NGINX_HELPER_CACHE_PATH "$CACHE_DIR" || log_warn "Failed to set Nginx Helper cache path"
+            # Default purge_archive_on_edit=0 to prevent archive cache eviction floods during post updates/imports
+            run_wp_cli "$wp_path" eval '
+                $opts = get_option("rt_wp_nginx_helper_options", array());
+                if (!is_array($opts)) { $opts = array(); }
+                $opts["enable_purge"] = 1;
+                $opts["purge_method"] = "get_request";
+                $opts["purge_url"] = "/purge";
+                $opts["purge_archive_on_edit"] = 0;
+                $opts["purge_archive_on_del"] = 0;
+                $opts["purge_homepage_on_edit"] = 1;
+                $opts["purge_homepage_on_del"] = 1;
+                update_option("rt_wp_nginx_helper_options", $opts);
+            ' >/dev/null 2>&1 || true
         else
             log_warn "Skipping Nginx Helper for $domain because cache purge module is not available"
         fi
@@ -6975,6 +7116,9 @@ $allow_lines
         deny all;
         fastcgi_cache_purge wordpress_cache "\$scheme\$host\$request_uri";
     }
+
+    # Optional: protect key high-traffic landing archives from automated purge floods during batch jobs
+    # location = /purge/archive-slug/ { return 200 "OK\n"; }
 
     location ~ /purge(/.*) {
 $allow_lines
@@ -7051,7 +7195,8 @@ server {
         fastcgi_cache wordpress_cache;
         fastcgi_cache_methods GET HEAD;
         fastcgi_cache_bypass \$skip_cache_request;
-        fastcgi_no_cache \$skip_cache_request \$upstream_http_set_cookie;
+        fastcgi_no_cache \$skip_cache_request;
+        fastcgi_ignore_headers Cache-Control Expires Set-Cookie;
         fastcgi_cache_valid 200 301 302 $FASTCGI_CACHE_TTL;
         fastcgi_cache_valid 404 $FASTCGI_CACHE_TTL_404;
         add_header X-FastCGI-Cache \$upstream_cache_status always;
@@ -7448,6 +7593,9 @@ COMMANDS:
   cache-deep-check [domain|--all]
                               Deep-check cache behavior (anonymous/query/cookie probes)
   cache-purge-check           Verify source build state + cache purge module wiring
+  wp-bulk-start <domain>      Suppress archive/homepage cache purges during batch imports
+  wp-bulk-finish <domain>     Restore standard purge options and trigger a clean cache refresh
+  wp-bulk-run <domain> <cmd>  Execute WP-CLI command with automated bulk purge suppression
   factory-reset [--force]     Remove stack, data, and configs (DANGEROUS)
   refresh-installation [--force]  Reinstall stack and reset to defaults
   list-features               Show full feature list
@@ -7456,6 +7604,9 @@ COMMANDS:
 EXAMPLES:
   # Install complete WordPress LEMP stack
   sudo bash $0
+
+  # Bulk WP-CLI ingestion without evicting landing archives on every item
+  sudo bash $0 wp-bulk-run example.com post generate --count=500
 
   # Create new WordPress site
   sudo bash $0 create-site example.com "My Site" admin@example.com
@@ -8209,7 +8360,7 @@ cache_status_for_site() {
         grep -q 'fastcgi_cache wordpress_cache;' "$conf" 2>/dev/null && has_cache="yes"
         grep -q 'fastcgi_cache_methods GET HEAD;' "$conf" 2>/dev/null && has_methods="yes"
         grep -q 'fastcgi_cache_bypass \$skip_cache_request;' "$conf" 2>/dev/null && has_bypass="yes"
-        grep -q 'fastcgi_no_cache \$skip_cache_request \$upstream_http_set_cookie;' "$conf" 2>/dev/null && has_no_cache="yes"
+        grep -qE 'fastcgi_no_cache \$skip_cache_request( \$upstream_http_set_cookie)?;' "$conf" 2>/dev/null && has_no_cache="yes"
     fi
 
     base_url=$(resolve_site_probe_url "$domain" 2>/dev/null || true)
@@ -9594,6 +9745,22 @@ main() {
         compression-disable-origin-zstd)
             check_root
             disable_origin_zstd || exit 1
+            ;;
+
+        wp-bulk-start)
+            check_root
+            wp_bulk_start "${2:-}" || exit 1
+            ;;
+
+        wp-bulk-finish)
+            check_root
+            wp_bulk_finish "${2:-}" || exit 1
+            ;;
+
+        wp-bulk-run)
+            check_root
+            shift
+            wp_bulk_run "$@" || exit 1
             ;;
 
         factory-reset)

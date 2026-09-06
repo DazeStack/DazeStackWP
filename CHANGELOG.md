@@ -18,6 +18,11 @@ All notable changes to DazeStack WP are documented in this file.
 - **Origin Compression Toggles**: Added CLI commands `compression-enable-origin-brotli`, `compression-disable-origin-brotli`, `compression-enable-origin-zstd`, and `compression-disable-origin-zstd` for direct-to-origin setups without CDNs.
 - **Enhanced Compression Status**: Updated `compression-status` diagnostic command to report active compression mode (`dynamic+static` vs `static-only; CDN-safe`).
 - **CLI Setup Aliases**: Added `install`, `setup`, and `full-install` aliases to CLI main router for unattended deployments.
+- **FastCGI Cache Header & Cookie Handling**: Added `fastcgi_ignore_headers Cache-Control Expires Set-Cookie;` and removed `$upstream_http_set_cookie` from `fastcgi_no_cache` so default WordPress headers and session/tracking cookies do not bypass full-page caching.
+- **Persistent Microcache tmpfiles.d**: Installed `/etc/tmpfiles.d/nginx-cache.conf` (`0755` for `/var/cache/nginx`, `0700` for `/var/cache/nginx/microcache`) ensuring the directory survives OS maintenance and prevents 5-second lock timeout freezes.
+- **Enlarged FastCGI Buffers in RAM**: Increased FastCGI buffers in `wordpress-security.conf` to `64 64k` (total 4MB), `fastcgi_buffer_size 128k`, `fastcgi_busy_buffers_size 256k`, and `fastcgi_temp_file_write_size 256k` to handle heavy WooCommerce and catalog pages directly in RAM without disk buffering.
+- **Extended Microcache TTL**: Updated default `FASTCGI_CACHE_TTL` from `60s` to `10m` to prevent unnecessary cache evictions and database load on high-traffic sites while relying on instant event-driven purges.
+- **Bulk Operation Purge Flood Prevention**: Added `wp-bulk-start`, `wp-bulk-finish`, and `wp-bulk-run` CLI commands and defaulted `purge_archive_on_edit = 0` in Nginx Helper to prevent catastrophic archive purge floods during large WP-CLI imports and cron jobs.
 
 ## [0.1.0] - 2026-09-04
 

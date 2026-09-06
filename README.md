@@ -521,6 +521,14 @@ DazeStack WP is suitable for:
 | `update-cloudflare-ips` | Refreshes Cloudflare IP mappings. | `sudo bash dazestack-wp.sh update-cloudflare-ips` |
 | `optimize-images` | Generates AVIF/WebP for images. | `sudo bash dazestack-wp.sh optimize-images --all` |
 
+### Bulk Ingestion and WP-CLI Operations
+
+| Command | What it does | Example |
+|---|---|---|
+| `wp-bulk-start` | Suppresses archive purge floods during batch jobs. | `sudo bash dazestack-wp.sh wp-bulk-start example.com` |
+| `wp-bulk-finish` | Restores standard purge options and flushes cache once. | `sudo bash dazestack-wp.sh wp-bulk-finish example.com` |
+| `wp-bulk-run` | Wraps any WP-CLI command with automated purge suppression. | `sudo bash dazestack-wp.sh wp-bulk-run example.com post generate --count=500` |
+
 For full command list, run:
 
 ```bash

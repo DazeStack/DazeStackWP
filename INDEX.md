@@ -111,6 +111,9 @@ Invocation: `sudo bash dazestack-wp.sh <command> [args]` or, after `install-cli`
 | **show-credentials** &lt;domain&gt; | Show decrypted credentials for site. |
 | **upgrade-sites** | Apply new snippets/features to existing sites. |
 | **update-cloudflare-ips** | Refresh Cloudflare real-IP config. |
+| **wp-bulk-start** &lt;domain&gt; | Suppress archive/homepage purges during batch jobs. |
+| **wp-bulk-finish** &lt;domain&gt; | Restore purge options and flush cache once. |
+| **wp-bulk-run** &lt;domain&gt; &lt;cmd...&gt; | Run WP-CLI command with automated bulk purge suppression. |
 
 *(Empty `command` with TTY = menu; without TTY = full install.)*
 
