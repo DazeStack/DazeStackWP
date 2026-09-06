@@ -20,3 +20,4 @@ Thumbs.db
 *.dsc
 *.tar.gz
 *.tar.xz
+pkg_temp/

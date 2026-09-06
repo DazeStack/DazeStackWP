@@ -10,8 +10,13 @@ dazestack-wp (0.1.1-1) noble; urgency=medium
   * Switched default cache purge repo to actively maintained nginx-modules/ngx_cache_purge.
   * Enforced UFW firewall rules before initializing Fail2ban jail with dynamic SSH port.
   * Added resolve_nginx_source_version in build_nginx_from_source to prevent 404s.
+  * Added fastcgi_ignore_headers (Cache-Control, Expires, Set-Cookie) and removed $upstream_http_set_cookie from fastcgi_no_cache.
+  * Installed persistent systemd-tmpfiles definition (/etc/tmpfiles.d/nginx-cache.conf) to preserve cache directories.
+  * Upgraded FastCGI memory buffers to 4MB (64 64k) with 128k initial buffer to eliminate disk spooling.
+  * Extended default microcache TTL from 60s to 10m for high-concurrency resilience.
+  * Defaulted Nginx Helper purge_archive_on_edit to 0 and added wp-bulk-start/wp-bulk-finish/wp-bulk-run CLI commands.
 
- -- Ashish Dungdung <mail@ashishdungdung.com>  Fri, 04 Sep 2026 12:17:00 +0530
+ -- Ashish Dungdung <mail@ashishdungdung.com>  Sun, 06 Sep 2026 08:00:00 +0530
 
 dazestack-wp (0.1.0-1) noble; urgency=medium
 
