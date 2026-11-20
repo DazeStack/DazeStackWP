@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Lint, Test & Package Validation
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify line endings
+        run: |
+          if git grep -I -l $'\r'; then
+            echo "Error: CRLF line endings detected in repository files!"
+            exit 1
+          fi
+          echo "Line endings check passed: All files are Unix LF."
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y bash jq shellcheck devscripts debhelper
+
+      - name: Check Bash version
+        run: bash --version
+
+      - name: Run Unit Tests
+        run: |
+          for t in tests/*.sh; do
+            echo "Running $t..."
+            bash "$t"
+          done
+
+      - name: Run Syntax & Parameter Checks
+        run: |
+          bash -n dazestack-wp.sh
+          echo "Bash syntax validation passed."
+
+      - name: Validate Debian Packaging Rules
+        run: |
+          if grep -q "usr/local" debian/rules; then
+            echo "Error: /usr/local found in debian/rules (Debian policy violation)"
+            exit 1
+          fi
+          echo "Debian packaging rules passed policy check."
+
+      - name: Test Debian Source Package Build
+        run: |
+          dpkg-buildpackage -us -uc -S
+          echo "Debian source package built successfully."

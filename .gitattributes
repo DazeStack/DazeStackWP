@@ -1,0 +1,7 @@
+# Enforce consistent Unix LF line endings across all platforms
+* text=auto eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.conf text eol=lf

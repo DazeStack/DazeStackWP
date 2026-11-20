@@ -2,6 +2,25 @@
 
 All notable changes to DazeStack WP are documented in this file.
 
+## [0.1.2] - 2026-11-20
+
+### Fixed
+- **Nginx QUIC Multi-Vhost `reuseport` Crash**: Dynamically check for existing `reuseport` directives across active vhosts before patching HTTP/3, eliminating duplicate socket parameter crashes (`duplicate listen options for 0.0.0.0:443`) on servers with $\ge 2$ SSL sites.
+- **Redis Unix Socket Parity**: Fully migrated Redis to zero-latency Unix domain socket (`/run/redis/redis-server.sock`, `port 0`). Updated `create_site()` to configure `WP_REDIS_SCHEME "unix"` and `WP_REDIS_PATH`, standardized `redis_exec` helper, and added migration logic in `upgrade_existing_sites()`.
+- **Credential Snooping Mitigation (`/proc`)**: Piped MySQL queries via STDIN (`mysql <<< "$query"`) and authenticated Redis via `REDISCLI_AUTH` environment variable, preventing passwords from leaking into world-readable `/proc/<pid>/cmdline`.
+- **Catastrophic Deletion Guard**: Protected `safe_cleanup()` against deleting base root directories (`/var/www`, `/var/backups/dazestack-wp`, `/var/cache/nginx/microcache`) if called with base directory or unset variable.
+- **WordPress Memory Ceiling Bounds**: Enforced sane maximums on `WP_MEMORY_LIMIT` (capped at `512M` for WooCommerce, `256M` default), preventing Linux OOM killer invocations during concurrency spikes.
+- **WordPress System Cron CWD Context**: Changed working directory into `$wp_root` before running `php wp-cron.php`, preventing plugin relative-path failures.
+- **Automated Backup Socket Detection**: Added filesystem socket discovery fallback (`/run/mysqld/mysqld.sock`, `/var/run/mysqld/mysqld.sock`, `/tmp/mysql.sock`) to the generated standalone backup script for environments without `mysql_config`.
+- **Shared Memory Mount**: Secured standard POSIX `/dev/shm` with `defaults,noexec,nosuid` instead of legacy `/run/shm`.
+- **Debian Packaging Compliance**: Corrected Debian install destination from `/usr/local/sbin` to `/usr/sbin/dazestack-wp` to comply with Debian Policy Manual §9.1.2.
+- **npm Specification Cleanup**: Updated `package.json` with standard `"bin"` mapping and test command, removing unauthorized root install scripts.
+
+### Added
+- **Automated Test Suite**: Added `tests/test_safety_and_validation.sh` and `tests/test_php_package.sh` testing domain validation, database sanitization, cleanup guards, memory bounds, and PHP packaging logic.
+- **Homebrew Formula**: Added `Formula/dazestack-wp.rb` for macOS and Linuxbrew users.
+- **GitHub Actions CI**: Added `.github/workflows/ci.yml` providing automated line-ending checks, bash syntax validation (`bash -n`), unit tests, and Debian package policy verification.
+
 ## [0.1.1] - 2026-09-04
 
 ### Fixed

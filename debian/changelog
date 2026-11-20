@@ -1,3 +1,22 @@
+dazestack-wp (0.1.2-1) noble; urgency=medium
+
+  * Release v0.1.2: Security hardening, multi-vhost QUIC resolution, and Redis socket parity.
+  * Resolved Nginx QUIC duplicate reuseport parameter collision across multi-site SSL vhosts.
+  * Migrated Redis completely to zero-latency Unix domain socket (/run/redis/redis-server.sock) with TCP disabled.
+  * Standardized redis_exec helper with REDISCLI_AUTH environment variable to prevent /proc password exposure.
+  * Added steroid performance flags to WordPress Redis object cache configuration.
+  * Protected safe_cleanup() against root /var/www base directory deletion.
+  * Enforced safe WordPress WP_MEMORY_LIMIT bounds (max 512M) to prevent concurrency OOM crashes.
+  * Eliminated MySQL plaintext password exposure in process table (/proc) via stdin query piping.
+  * Fixed WordPress system cron working directory context (cd $wp_root).
+  * Added robust filesystem socket detection fallback to automated backup script generator.
+  * Replaced obsolete /run/shm shared memory configuration with canonical /dev/shm.
+  * Added automated test suite (tests/test_safety_and_validation.sh and tests/test_php_package.sh).
+  * Fixed Debian packaging policy compliance (installed to /usr/sbin/dazestack-wp).
+  * Added Homebrew Formula and GitHub Actions CI workflow.
+
+ -- Ashish Dungdung <mail@ashishdungdung.com>  Fri, 20 Nov 2026 08:00:00 +0530
+
 dazestack-wp (0.1.1-1) noble; urgency=medium
 
   * Release v0.1.1: Production hardening from live Ubuntu 26.04 LTS deployment.

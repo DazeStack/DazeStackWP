@@ -6,11 +6,16 @@ if [ -z "${BASH_VERSION:-}" ]; then
         exec bash "$0" "$@"
     fi
     echo "Error: bash is required to run this script." >&2
-    exit 1
+    return 1 2>/dev/null || exit 1
+fi
+# Associative arrays (declare -A) and mapfile require Bash 4+
+if [[ -z "${BASH_VERSINFO[0]:-}" ]] || [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+    echo "Error: Bash 4 or later is required (this script uses associative arrays and mapfile). Current: ${BASH_VERSION:-unknown}. On Ubuntu 24.04+ use the system bash." >&2
+    return 1 2>/dev/null || exit 1
 fi
 
 ################################################################################
-# DazeStack WP v0.1.1
+# DazeStack WP v0.1.2
 # Tagline: Laze while your WordPress stack builds itself.
 # Series: DazeStack - tools that let you laze while the code does the work.
 # Description: Production-ready, fully automated WordPress LEMP platform with per-site
@@ -32,7 +37,7 @@ INSTALLER_NAME="DazeStack WP"
 INSTALLER_TAGLINE="Laze while your WordPress stack builds itself."
 INSTALLER_SERIES="DazeStack"
 INSTALLER_DESCRIPTION="Production-ready, fully automated WordPress LEMP platform. The idea was to automate and make it full fledged as much as possible."
-INSTALLER_VERSION="0.1.1"
+INSTALLER_VERSION="0.1.2"
 INSTALLER_EDITION="Core"
 INSTALLER_AUTHOR="Ashish Dungdung"
 INSTALLER_WEBSITE="https://ashishdungdung.com"
@@ -664,7 +669,22 @@ mysql_exec() {
     if [[ -n "$MYSQL_SOCKET" ]]; then
         socket_args=(--socket="$MYSQL_SOCKET")
     fi
-    mysql "${socket_args[@]}" -e "$query"
+    mysql "${socket_args[@]}" <<< "$query"
+}
+
+redis_exec() {
+    local socket_args=()
+    if [[ -S "${REDIS_SOCKET:-}" ]]; then
+        socket_args=(-s "$REDIS_SOCKET")
+    elif [[ -n "${REDIS_HOST:-}" && -n "${REDIS_PORT:-}" && "${REDIS_PORT:-}" != "0" ]]; then
+        socket_args=(-h "$REDIS_HOST" -p "$REDIS_PORT")
+    fi
+
+    if [[ -n "${REDIS_PASSWORD:-}" ]]; then
+        REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli "${socket_args[@]}" "$@"
+    else
+        redis-cli "${socket_args[@]}" "$@"
+    fi
 }
 
 mysqldump_exec() {
@@ -710,9 +730,15 @@ validate_redis_connection() {
     local password=$1
     local max_attempts=5
     local attempt=0
+    local socket_args=()
+    if [[ -S "${REDIS_SOCKET:-}" ]]; then
+        socket_args=(-s "$REDIS_SOCKET")
+    elif [[ -n "${REDIS_HOST:-}" && -n "${REDIS_PORT:-}" && "${REDIS_PORT:-}" != "0" ]]; then
+        socket_args=(-h "$REDIS_HOST" -p "$REDIS_PORT")
+    fi
     
     while [[ $attempt -lt $max_attempts ]]; do
-        if redis-cli -a "$password" PING 2>/dev/null | grep -q "PONG"; then
+        if REDISCLI_AUTH="$password" redis-cli "${socket_args[@]}" PING 2>/dev/null | grep -q "PONG"; then
             return 0
         fi
         ((++attempt))
@@ -962,10 +988,15 @@ safe_cleanup() {
     normalized_path="${path%/}"
     [[ -z "$normalized_path" ]] && normalized_path="$path"
     
-    # Only cleanup if path is within expected directories
+    # Only cleanup if path is within expected directories (never delete the base directory itself)
     for base in "$SITES_DIR" "$BACKUP_DIR" "$CACHE_DIR"; do
         local normalized_base="${base%/}"
-        if [[ "$normalized_path" == "$normalized_base" || "$normalized_path" == "$normalized_base/"* ]]; then
+        if [[ "$normalized_path" == "$normalized_base" ]]; then
+            log_error "Refusing to delete base directory itself: $path"
+            log_security "DANGEROUS_OPERATION" "Attempted cleanup of base root directory: $path"
+            return 1
+        fi
+        if [[ "$normalized_path" == "$normalized_base/"* ]]; then
             allowed=true
             break
         fi
@@ -1137,8 +1168,8 @@ redis_release_db() {
     fi
     
     # Flush dedicated database before releasing (never flush shared DB 0)
-    if [[ "$db" != "0" && -n "$REDIS_PASSWORD" ]]; then
-        redis-cli -a "$REDIS_PASSWORD" -n "$db" FLUSHDB 2>/dev/null || true
+    if [[ "$db" != "0" ]]; then
+        redis_exec -n "$db" FLUSHDB >/dev/null 2>&1 || true
     fi
     
     # Atomic update with backup
@@ -1217,6 +1248,7 @@ domain_register() {
            --arg db_user "$db_user" \
            --arg site_title "$site_title" \
            --arg admin_email "$admin_email" \
+           --arg version "$INSTALLER_VERSION" \
         '.domains[$domain] = {
             redis_db: ($redis_db|tonumber),
             php_pool: $pool,
@@ -1230,7 +1262,7 @@ domain_register() {
             cdn_updated_at: now,
             created_at: now,
             status: "active",
-            version: "0.1.0"
+            version: $version
         } | 
         .metadata.total += 1 |
         .metadata.last_updated = now' \
@@ -1376,13 +1408,10 @@ calculate_system_resources() {
         PHP_MEMORY_LIMIT="256M"
     elif [[ $SYSTEM_RAM_GB -le 4 ]]; then
         php_process_size=96
-        PHP_MEMORY_LIMIT="512M"
-    elif [[ $SYSTEM_RAM_GB -le 8 ]]; then
-        php_process_size=128
-        PHP_MEMORY_LIMIT="1024M"
+        PHP_MEMORY_LIMIT="256M"
     else
         php_process_size=128
-        PHP_MEMORY_LIMIT="2048M"
+        PHP_MEMORY_LIMIT="512M"
     fi
     
     # Calculate max children with safety margin (80% of available)
@@ -3079,14 +3108,16 @@ load_nginx_build_state() {
     if [[ ! -f "$NGINX_BUILD_STATE_FILE" ]]; then
         return 1
     fi
-    NGINX_BUILD_TYPE=$(jq -r '.build_type // "package"' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "package")
-    NGINX_BUILD_VERSION=$(jq -r '.version // ""' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "")
-    NGINX_QUIC_OPENSSL_VENDOR=$(jq -r '.openssl_vendor // "official"' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "official")
-    NGINX_QUIC_OPENSSL_REPO=$(jq -r '.openssl_repo // ""' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "")
-    NGINX_QUIC_OPENSSL_REF=$(jq -r '.openssl_ref // "latest-stable"' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "latest-stable")
-    NGINX_BUILD_HTTP3_REQUIRED=$(jq -r '.http3_required // false' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "false")
-    NGINX_BUILD_BROTLI_REQUIRED=$(jq -r '.brotli_required // false' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "false")
-    NGINX_BUILD_ZSTD_REQUIRED=$(jq -r '.zstd_required // false' "$NGINX_BUILD_STATE_FILE" 2>/dev/null || echo "false")
+    local nginx_state
+    mapfile -t nginx_state < <(jq -r '.build_type // "package", .version // "", .openssl_vendor // "official", .openssl_repo // "", .openssl_ref // "latest-stable", .http3_required // false, .brotli_required // false, .zstd_required // false' "$NGINX_BUILD_STATE_FILE" 2>/dev/null)
+    NGINX_BUILD_TYPE="${nginx_state[0]:-package}"
+    NGINX_BUILD_VERSION="${nginx_state[1]:-}"
+    NGINX_QUIC_OPENSSL_VENDOR="${nginx_state[2]:-official}"
+    NGINX_QUIC_OPENSSL_REPO="${nginx_state[3]:-}"
+    NGINX_QUIC_OPENSSL_REF="${nginx_state[4]:-latest-stable}"
+    NGINX_BUILD_HTTP3_REQUIRED="${nginx_state[5]:-false}"
+    NGINX_BUILD_BROTLI_REQUIRED="${nginx_state[6]:-false}"
+    NGINX_BUILD_ZSTD_REQUIRED="${nginx_state[7]:-false}"
     return 0
 }
 
@@ -4927,7 +4958,7 @@ phase_redis() {
     # Generate strong Redis password
     REDIS_PASSWORD=$(generate_secure_password 48)
     
-    # SECURE Redis configuration
+    # SECURE Redis configuration (Unix domain socket only, TCP disabled)
     cat > /etc/redis/redis.conf <<REDIS_CONFIG
 # Memory
 maxmemory $REDIS_MEMORY
@@ -4937,11 +4968,9 @@ lazyfree-lazy-eviction yes
 # Databases
 databases $REDIS_MAX_DBS
 
-# Security
+# Security & Socket (Zero TCP latency, Unix socket only)
 requirepass $REDIS_PASSWORD
-bind 127.0.0.1
-protected-mode yes
-port 6379
+port 0
 
 # Unix Socket (high performance local communication)
 unixsocket $REDIS_SOCKET
@@ -4962,11 +4991,10 @@ REDIS_CONFIG
     # Save Redis password to encrypted credentials
     cat > "$CREDENTIALS_DIR/redis-credentials.txt" <<REDIS_CREDS
 Redis Configuration
-Host: $REDIS_HOST
-Port: $REDIS_PORT
+Socket: $REDIS_SOCKET
 Password: $REDIS_PASSWORD
 Max Memory: $REDIS_MEMORY
- Version: $INSTALLER_VERSION
+Version: $INSTALLER_VERSION
 REDIS_CREDS
 
     encrypt_credentials "$CREDENTIALS_DIR/redis-credentials.txt" || {
@@ -5139,9 +5167,9 @@ for domain in $domains; do
     [[ ! -d "$wp_root" ]] && continue
     
     if [[ -f "$wp_root/wp-cron.php" ]]; then
-        # Verify syntax and execute strictly as www-data to prevent privilege escalation
+        # Verify syntax and execute strictly as www-data in site root to prevent privilege escalation and context loss
         if php -l "$wp_root/wp-cron.php" >/dev/null 2>&1; then
-            timeout 120 su -s /bin/bash www-data -c "php '$wp_root/wp-cron.php'" >/dev/null 2>&1 || true
+            timeout 120 su -s /bin/bash www-data -c "cd '$wp_root' && php '$wp_root/wp-cron.php'" >/dev/null 2>&1 || true
         fi
     fi
 done
@@ -5255,6 +5283,14 @@ MYSQL_SOCKET_ARG=""
 
 if command -v mysql_config >/dev/null 2>&1; then
   MYSQL_SOCKET=$(mysql_config --socket 2>/dev/null || true)
+fi
+if [[ -z "$MYSQL_SOCKET" || ! -S "$MYSQL_SOCKET" ]]; then
+  for s in /run/mysqld/mysqld.sock /var/run/mysqld/mysqld.sock /tmp/mysql.sock; do
+    if [[ -S "$s" ]]; then
+      MYSQL_SOCKET="$s"
+      break
+    fi
+  done
 fi
 if [[ -n "$MYSQL_SOCKET" ]] && [[ -S "$MYSQL_SOCKET" ]]; then
   MYSQL_SOCKET_ARG="--socket=$MYSQL_SOCKET"
@@ -5435,10 +5471,11 @@ FAIL2BAN
     # Apply conservative sysctl performance tuning
     apply_sysctl_tuning
     
-    # Secure shared memory
-    if ! grep -q "tmpfs /run/shm tmpfs" /etc/fstab 2>/dev/null; then
-        echo "tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0" >> /etc/fstab
-        log_success "Shared memory secured"
+    # Secure shared memory (/dev/shm)
+    if [[ -d /dev/shm ]] && ! grep -q "/dev/shm" /etc/fstab 2>/dev/null; then
+        echo "tmpfs /dev/shm tmpfs defaults,noexec,nosuid 0 0" >> /etc/fstab
+        mount -o remount,noexec,nosuid /dev/shm 2>/dev/null || true
+        log_success "Shared memory (/dev/shm) secured"
     fi
     
     # Disable unnecessary services
@@ -5529,7 +5566,7 @@ phase_health_check() {
     # Check 4: Redis Connectivity
     ((++checks_total))
     if [[ -n "$REDIS_PASSWORD" ]]; then
-        if redis-cli -a "$REDIS_PASSWORD" PING 2>/dev/null | grep -q "PONG"; then
+        if redis_exec PING 2>/dev/null | grep -q "PONG"; then
             log_success "Redis authentication working"
             ((++checks_passed))
         else
@@ -5543,7 +5580,7 @@ phase_health_check() {
     if [[ -n "$REDIS_PASSWORD" ]]; then
         local start_ns end_ns redis_latency=999
         start_ns=$(date +%s%N 2>/dev/null || true)
-        if timeout 3 redis-cli -a "$REDIS_PASSWORD" PING >/dev/null 2>&1; then
+        if timeout 3 bash -c 'redis_exec PING >/dev/null 2>&1' 2>/dev/null || timeout 3 redis_exec PING >/dev/null 2>&1; then
             end_ns=$(date +%s%N 2>/dev/null || true)
             if [[ -n "$start_ns" && -n "$end_ns" && ${#start_ns} -gt 10 && ${#end_ns} -gt 10 ]]; then
                 redis_latency=$(( (end_ns - start_ns) / 1000000 ))
@@ -5891,7 +5928,23 @@ enable_http3_for_vhost_file() {
     local enable_http3="false"
     [[ "$HTTP3_AVAILABLE" == "true" ]] && enable_http3="true"
 
-    if awk -v enable_http3="$enable_http3" -v enable_hq="$enable_hq" -v enable_quic="$enable_quic" -v enable_early="$enable_early" '
+    local reuseport_arg=" reuseport"
+    # In Nginx, reuseport can only be declared ONCE per [ip:]port.
+    # If another enabled vhost has reuseport, we must NOT add another reuseport.
+    if grep -E -s -q "listen[[:space:]]+.*443.*quic.*reuseport" /etc/nginx/sites-enabled/* /etc/nginx/conf.d/* 2>/dev/null; then
+        local existing_file
+        existing_file=$(grep -E -s -l "listen[[:space:]]+.*443.*quic.*reuseport" /etc/nginx/sites-enabled/* /etc/nginx/conf.d/* 2>/dev/null | head -1)
+        local real_conf real_existing
+        real_conf=$(realpath "$conf" 2>/dev/null || echo "$conf")
+        real_existing=$(realpath "$existing_file" 2>/dev/null || echo "$existing_file")
+        if [[ "$real_conf" != "$real_existing" ]]; then
+            reuseport_arg=""
+        fi
+    elif [[ -n "${GLOBAL_HTTP3_REUSEPORT_CLAIMED:-}" ]]; then
+        reuseport_arg=""
+    fi
+
+    if awk -v enable_http3="$enable_http3" -v enable_hq="$enable_hq" -v enable_quic="$enable_quic" -v enable_early="$enable_early" -v reuseport_arg="$reuseport_arg" '
         function reset_flags() {
             has_ssl=0; has_ssl6=0; has_http2=0; has_quic=0; has_quic6=0;
             has_alt=0; has_alt29=0; has_alt_hq=0;
@@ -5934,8 +5987,8 @@ enable_http3_for_vhost_file() {
                     indent=substr(line, RSTART, RLENGTH);
                     if (!has_http2) print indent "http2 on;";
                     if (enable_http3 == "true") {
-                        if (!has_quic) print indent "listen 443 quic reuseport;";
-                        if (has_ssl6 && !has_quic6) print indent "listen [::]:443 quic reuseport;";
+                        if (!has_quic) print indent "listen 443 quic" reuseport_arg ";";
+                        if (has_ssl6 && !has_quic6) print indent "listen [::]:443 quic" reuseport_arg ";";
                         if (!has_alt) print indent "add_header Alt-Svc " sq "h3=\":443\"; ma=86400" sq " always;";
                         if (!has_alt29) print indent "add_header Alt-Svc " sq "h3-29=\":443\"; ma=86400" sq " always;";
                         if (enable_hq == "true") {
@@ -6010,6 +6063,7 @@ enable_http3_for_vhost_file() {
         fi
         if [[ -s "$tmp" ]]; then
             mv "$tmp" "$conf"
+            [[ -n "$reuseport_arg" ]] && GLOBAL_HTTP3_REUSEPORT_CLAIMED="true"
             return 0
         fi
     fi
@@ -6027,6 +6081,7 @@ enable_http3_for_all_ssl_vhosts() {
     local changed=()
     local backups=()
     local ssl_candidates=0
+    local GLOBAL_HTTP3_REUSEPORT_CLAIMED=""
 
     while IFS= read -r conf; do
         [[ -f "$conf" ]] || continue
@@ -6521,9 +6576,11 @@ show_cdn_status() {
     local enabled
     local url
     local provider
-    enabled=$(jq -r ".domains[\"$domain\"].cdn_enabled // false" "$REGISTRY_FILE" 2>/dev/null)
-    url=$(jq -r ".domains[\"$domain\"].cdn_url // \"\"" "$REGISTRY_FILE" 2>/dev/null)
-    provider=$(jq -r ".domains[\"$domain\"].cdn_provider // \"\"" "$REGISTRY_FILE" 2>/dev/null)
+    local cdn_details
+    mapfile -t cdn_details < <(jq -r ".domains[\"$domain\"] | .cdn_enabled // false, .cdn_url // \"\", .cdn_provider // \"\"" "$REGISTRY_FILE" 2>/dev/null)
+    enabled="${cdn_details[0]:-false}"
+    url="${cdn_details[1]:-}"
+    provider="${cdn_details[2]:-}"
 
     echo "CDN: $enabled"
     [[ -n "$url" ]] && echo "CDN URL: $url"
@@ -6656,12 +6713,28 @@ upgrade_existing_sites() {
         update_vhost_fastcgi_cache "$domain" || true
         update_vhost_image_optimization "$domain" || true
 
+        # Migrate site to low-latency Redis Unix socket and steroid flags if needed
+        local wp_path="$SITES_DIR/$domain/public"
+        if [[ -f "$wp_path/wp-config.php" ]] && command -v "$WP_CLI_BIN" >/dev/null 2>&1; then
+            run_wp_cli "$wp_path" config delete WP_REDIS_HOST 2>/dev/null || true
+            run_wp_cli "$wp_path" config delete WP_REDIS_PORT 2>/dev/null || true
+            run_wp_cli "$wp_path" config set WP_REDIS_SCHEME "unix" 2>/dev/null || true
+            run_wp_cli "$wp_path" config set WP_REDIS_PATH "$REDIS_SOCKET" 2>/dev/null || true
+            run_wp_cli "$wp_path" config set WP_REDIS_ASYNC_FLUSH true --raw 2>/dev/null || true
+            run_wp_cli "$wp_path" config set WP_REDIS_DISABLE_METRICS true --raw 2>/dev/null || true
+            run_wp_cli "$wp_path" config set WP_REDIS_DISABLE_BANNERS true --raw 2>/dev/null || true
+            run_wp_cli "$wp_path" config set WP_REDIS_TIMEOUT 1 --raw 2>/dev/null || true
+            run_wp_cli "$wp_path" config set WP_REDIS_READ_TIMEOUT 1 --raw 2>/dev/null || true
+        fi
+
         local cdn_enabled
         local cdn_url
         local cdn_provider
-        cdn_enabled=$(jq -r ".domains[\"$domain\"].cdn_enabled // false" "$REGISTRY_FILE" 2>/dev/null)
-        cdn_url=$(jq -r ".domains[\"$domain\"].cdn_url // \"\"" "$REGISTRY_FILE" 2>/dev/null)
-        cdn_provider=$(jq -r ".domains[\"$domain\"].cdn_provider // \"custom\"" "$REGISTRY_FILE" 2>/dev/null)
+        local cdn_details
+        mapfile -t cdn_details < <(jq -r ".domains[\"$domain\"] | .cdn_enabled // false, .cdn_url // \"\", .cdn_provider // \"custom\"" "$REGISTRY_FILE" 2>/dev/null)
+        cdn_enabled="${cdn_details[0]:-false}"
+        cdn_url="${cdn_details[1]:-}"
+        cdn_provider="${cdn_details[2]:-custom}"
         if [[ "$cdn_enabled" == "true" && -n "$cdn_url" ]]; then
             enable_cdn_for_site "$domain" "$cdn_url" "$cdn_provider" || true
         fi
@@ -6889,18 +6962,6 @@ create_site() {
     fi
     [[ -z "$PHP_VERSION" ]] && calculate_system_resources >/dev/null 2>&1
     
-    # Load Redis password if not in memory
-    if [[ -z "$REDIS_PASSWORD" ]]; then
-        if [[ -f "$CREDENTIALS_DIR/redis-credentials.txt.enc" ]]; then
-            decrypt_credentials "$CREDENTIALS_DIR/redis-credentials.txt.enc" || {
-                log_error "Failed to decrypt Redis credentials"
-                return 1
-            }
-            REDIS_PASSWORD=$(grep "^Password:" "$CREDENTIALS_DIR/redis-credentials.txt" | cut -d: -f2- | xargs)
-            shred -u -n 3 "$CREDENTIALS_DIR/redis-credentials.txt" 2>/dev/null
-        fi
-    fi
-    
     # Check if domain already exists
     if jq -e ".domains[\"$domain\"]" "$REGISTRY_FILE" >/dev/null 2>&1; then
         log_error "Domain already exists: $domain"
@@ -7048,12 +7109,17 @@ create_site() {
     run_wp_cli "$wp_path" config set WP_ENVIRONMENT_TYPE production
     run_wp_cli "$wp_path" config set WP_CACHE_KEY_SALT "${domain}:"
     
-    # Redis object cache integration
-    run_wp_cli "$wp_path" config set WP_REDIS_HOST "$REDIS_HOST"
-    run_wp_cli "$wp_path" config set WP_REDIS_PORT "$REDIS_PORT" --raw
+    # Redis object cache integration (Unix domain socket + steroid performance tuning)
+    run_wp_cli "$wp_path" config set WP_REDIS_SCHEME "unix"
+    run_wp_cli "$wp_path" config set WP_REDIS_PATH "$REDIS_SOCKET"
     run_wp_cli "$wp_path" config set WP_REDIS_PASSWORD "$REDIS_PASSWORD"
     run_wp_cli "$wp_path" config set WP_REDIS_DATABASE "$redis_db" --raw
     run_wp_cli "$wp_path" config set WP_REDIS_PREFIX "${domain//./_}:"
+    run_wp_cli "$wp_path" config set WP_REDIS_ASYNC_FLUSH true --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_DISABLE_METRICS true --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_DISABLE_BANNERS true --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_TIMEOUT 1 --raw
+    run_wp_cli "$wp_path" config set WP_REDIS_READ_TIMEOUT 1 --raw
     run_wp_cli "$wp_path" plugin install redis-cache --activate
     run_wp_cli "$wp_path" redis enable || true
 
@@ -7271,8 +7337,7 @@ Database Socket: $MYSQL_SOCKET
 
 Redis Configuration:
 Redis DB: $redis_db
-Redis Host: $REDIS_HOST
-Redis Port: $REDIS_PORT
+Redis Socket: $REDIS_SOCKET
 Redis Password: $REDIS_PASSWORD
 
 Site Configuration:
@@ -7316,6 +7381,7 @@ SITE_CREDS
     echo "  Password: [encrypted - use 'show-credentials' command]"
     echo ""
     echo "Redis Cache:"
+    echo "  Socket: $REDIS_SOCKET"
     echo "  Database: $redis_db"
     echo ""
     echo "Next Steps:"
@@ -7357,9 +7423,11 @@ delete_site() {
     fi
     
     # Get site details from registry
-    local db_name=$(jq -r ".domains[\"$domain\"].db_name" "$REGISTRY_FILE")
-    local db_user=$(jq -r ".domains[\"$domain\"].db_user" "$REGISTRY_FILE")
-    local pool_name=$(jq -r ".domains[\"$domain\"].php_pool" "$REGISTRY_FILE")
+    local db_name db_user pool_name site_details
+    mapfile -t site_details < <(jq -r ".domains[\"$domain\"] | .db_name, .db_user, .php_pool" "$REGISTRY_FILE" 2>/dev/null)
+    db_name="${site_details[0]:-}"
+    db_user="${site_details[1]:-}"
+    pool_name="${site_details[2]:-}"
     
     local delete_prompt="WARNING: This will permanently delete:
   - Domain: $domain
@@ -8038,7 +8106,7 @@ flush_redis_object_cache_all_sites() {
     fi
     local db
     for db in $redis_dbs; do
-        redis-cli -a "$REDIS_PASSWORD" -n "$db" FLUSHDB >/dev/null 2>&1 || true
+        redis_exec -n "$db" FLUSHDB >/dev/null 2>&1 || true
     done
     log_success "Redis object caches flushed for all WordPress sites"
     return 0
@@ -8574,8 +8642,10 @@ cache_purge_check() {
     local cache_purge_available="false"
 
     if command -v jq >/dev/null 2>&1 && [[ -f "$state_file" ]]; then
-        build_type=$(jq -r '.build_type // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
-        last_build_status=$(jq -r '.last_build_status // "unknown"' "$state_file" 2>/dev/null || echo "unknown")
+        local build_info
+        mapfile -t build_info < <(jq -r '.build_type // "unknown", .last_build_status // "unknown"' "$state_file" 2>/dev/null)
+        build_type="${build_info[0]:-unknown}"
+        last_build_status="${build_info[1]:-unknown}"
     fi
 
     module_path=$(find_nginx_module_file "$module_name" 2>/dev/null || true)
@@ -9809,5 +9879,8 @@ main() {
 # Trap errors and execute rollback if needed
 trap 'on_error $LINENO "$BASH_COMMAND" $?' ERR
 
-# Run main function with all arguments
-main "$@"
+# Run main function with all arguments when executed directly (allows sourcing for testing/libraries)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
+

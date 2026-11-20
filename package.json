@@ -1,7 +1,10 @@
 {
   "name": "dazestack-wp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Production-ready automated WordPress LEMP platform for Ubuntu 24.04 & 26.04 LTS",
+  "bin": {
+    "dazestack-wp": "./dazestack-wp.sh"
+  },
   "keywords": [
     "wordpress",
     "lemp",
@@ -14,7 +17,7 @@
     "bash"
   ],
   "scripts": {
-    "dazestack-wp": "dazestack-wp.sh"
+    "test": "bash tests/test_safety_and_validation.sh && bash tests/test_php_package.sh"
   },
-  "install": "install -m 0755 dazestack-wp.sh /usr/local/sbin/dazestack-wp"
+  "license": "AGPL-3.0-or-later"
 }
