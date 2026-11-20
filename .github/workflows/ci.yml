@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y bash jq shellcheck devscripts debhelper
+          sudo apt install -y bash jq shellcheck devscripts debhelper build-essential
 
       - name: Check Bash version
         run: bash --version
